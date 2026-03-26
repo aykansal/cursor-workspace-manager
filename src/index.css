@@ -118,11 +118,18 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground antialiased;
+    overflow: hidden;
     background-image:
       linear-gradient(to bottom, hsl(0 0% 100% / 0.03), transparent 30%),
       linear-gradient(to right, hsl(0 0% 100% / 0.02) 1px, transparent 1px),
@@ -132,4 +139,24 @@
   html {
     @apply font-sans;
   }
+}
+
+.workspace-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(0 0% 36%) hsl(0 0% 12%);
+}
+
+.workspace-scroll::-webkit-scrollbar {
+  height: 11px;
+  width: 11px;
+}
+
+.workspace-scroll::-webkit-scrollbar-track {
+  background: hsl(0 0% 12%);
+}
+
+.workspace-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid hsl(0 0% 12%);
+  border-radius: 999px;
+  background: hsl(0 0% 36%);
 }
