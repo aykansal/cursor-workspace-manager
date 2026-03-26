@@ -1,5 +1,18 @@
 import { useState, useEffect } from 'react'
 import type { Workspace, TransferResult } from '../electron/preload'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
@@ -25,67 +38,136 @@ function App() {
     loadWorkspaces()
   }
 
+  const selectedWorkspace = workspaces.find((w) => w.hash === sourceHash)
+  const totalChats = workspaces.reduce((total, workspace) => total + workspace.chatCount, 0)
+  const sortedWorkspaces = [...workspaces].sort((a, b) => {
+    const aTime = a.lastModified ? new Date(a.lastModified).getTime() : 0
+    const bTime = b.lastModified ? new Date(b.lastModified).getTime() : 0
+    return bTime - aTime
+  })
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-8">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-5xl font-bold mb-2 bg-linerar-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent">
-          Cursor Workspace Manager
-        </h1>
-        <p className="text-zinc-400 mb-8">View all workspaces • Transfer chats between any two hashes</p>
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_0%_0%,hsl(0_0%_100%/0.06),transparent_26%),linear-gradient(180deg,hsl(0_0%_4%),hsl(0_0%_3%))]" />
 
-        <button
-          onClick={loadWorkspaces}
-          className="mb-6 px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-2xl font-medium transition-colors"
-        >
-          🔄 Refresh Workspaces
-        </button>
+      <main className="mx-auto flex w-full max-w-300 flex-col gap-5 px-4 py-5 md:px-8 md:py-8">
+        <Card size="sm" className="border border-border/80 bg-card/80">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-3">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">Workspace Ops</Badge>
+              <Badge variant="secondary">{workspaces.length} Nodes</Badge>
+              <Badge variant="outline">{totalChats} Chats</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant={sourceHash ? 'default' : 'outline'}>
+                {sourceHash ? 'Source Locked' : 'No Source'}
+              </Badge>
+              <Button size="sm" variant="outline" onClick={loadWorkspaces}>
+                Refresh
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-        <div className="overflow-x-auto rounded-3xl border border-zinc-800 bg-zinc-900">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-zinc-800">
-                <th className="px-6 py-5 text-left">Project</th>
-                <th className="px-6 py-5 text-left">Hash</th>
-                <th className="px-6 py-5 text-left">Path</th>
-                <th className="px-6 py-5 text-center">Chats</th>
-                <th className="px-6 py-5 text-left">Last Modified</th>
-                <th className="px-6 py-5 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workspaces.map((w) => (
-                <tr key={w.hash} className="border-b border-zinc-800 hover:bg-zinc-800/50 transition-colors">
-                  <td className="px-6 py-5 font-medium">{w.projectPath.split(/[/\\]/).pop()}</td>
-                  <td className="px-6 py-5 font-mono text-sm text-zinc-400">{w.hash}</td>
-                  <td className="px-6 py-5 text-xs text-zinc-500 truncate max-w-md">{w.projectPath}</td>
-                  <td className="px-6 py-5 text-center font-medium">{w.chatCount}</td>
-                  <td className="px-6 py-5 text-sm">{w.lastModified ? new Date(w.lastModified).toLocaleString() : '-'}</td>
-                  <td className="px-6 py-5 text-right space-x-3">
-                    <button
-                      onClick={() => setSourceHash(w.hash)}
-                      className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium"
-                    >
-                      Select Source
-                    </button>
-                    <button
-                      onClick={() => handleTransfer(w.hash)}
-                      className="px-5 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl text-sm font-medium"
-                    >
-                      Transfer Here
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <Card className="border border-border/80 bg-card/85">
+          <CardHeader>
+            <CardTitle className="text-2xl tracking-tight md:text-4xl">Cursor Workspace Manager</CardTitle>
+            <CardDescription>
+              Minimal transfer control plane inspired by Linear and Notion: clean rows, fast actions, no visual noise.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+
+        <div className="grid gap-4 lg:grid-cols-[1.8fr_1fr]">
+          <Card className="overflow-hidden border border-border/80 bg-card/90">
+            <CardHeader>
+              <CardTitle>Workspace Index</CardTitle>
+              <CardDescription>Recently modified workspaces are listed first.</CardDescription>
+            </CardHeader>
+            <Separator />
+            <CardContent className="px-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-4">Project</TableHead>
+                    <TableHead>Hash</TableHead>
+                    <TableHead className="text-center">Chats</TableHead>
+                    <TableHead>Updated</TableHead>
+                    <TableHead className="pr-4 text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedWorkspaces.map((workspace) => {
+                    const isSource = sourceHash === workspace.hash
+
+                    return (
+                      <TableRow key={workspace.hash}>
+                        <TableCell className="pl-4 font-medium">
+                          <div className="flex flex-col gap-0.5">
+                            <span>{workspace.projectPath.split(/[/\\]/).pop()}</span>
+                            <span className="max-w-70 truncate text-xs text-muted-foreground">{workspace.projectPath}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{workspace.hash}</TableCell>
+                        <TableCell className="text-center">{workspace.chatCount}</TableCell>
+                        <TableCell>{workspace.lastModified ? new Date(workspace.lastModified).toLocaleString() : '-'}</TableCell>
+                        <TableCell className="pr-4">
+                          <div className="flex justify-end gap-2">
+                            <Button size="sm" variant={isSource ? 'default' : 'secondary'} onClick={() => setSourceHash(workspace.hash)}>
+                              {isSource ? 'Selected' : 'Source'}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleTransfer(workspace.hash)}
+                              disabled={!sourceHash || sourceHash === workspace.hash}
+                            >
+                              Transfer
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card className="border border-border/80 bg-card/90">
+            <CardHeader>
+              <CardTitle>Inspector</CardTitle>
+              <CardDescription>Current source and transfer context.</CardDescription>
+            </CardHeader>
+            <Separator />
+            <CardContent className="flex flex-col gap-4 pt-4">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Selected Hash</span>
+                <span className="font-mono text-xs break-all">{sourceHash ?? '-'}</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Project</span>
+                <span className="truncate">{selectedWorkspace?.projectPath.split(/[/\\]/).pop() ?? '-'}</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Database Path</span>
+                <span className="break-all text-xs text-muted-foreground">{selectedWorkspace?.dbPath ?? '-'}</span>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <Badge variant="outline">1. Choose source</Badge>
+                <Badge variant="outline">2. Transfer target</Badge>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         {status && (
-          <div className="mt-8 p-6 bg-zinc-900 border border-zinc-700 rounded-3xl text-lg">
-            {status}
-          </div>
+          <Alert>
+            <AlertTitle>Transfer Result</AlertTitle>
+            <AlertDescription>{status}</AlertDescription>
+          </Alert>
         )}
-      </div>
+      </main>
     </div>
   )
 }

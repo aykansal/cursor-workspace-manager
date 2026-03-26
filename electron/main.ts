@@ -31,7 +31,7 @@ function getChatCountFromValue(rawValue?: string): number {
     if (Array.isArray(parsed.tabs)) return parsed.tabs.length
     if (Array.isArray(parsed.composers)) return parsed.composers.length
   } catch (error) {
-    debugLog('Failed to parse chat value JSON for count:', error)
+    // debugLog('Failed to parse chat value JSON for count:', error)
   }
 
   return 0
@@ -54,7 +54,7 @@ function getChatPreviewFromValue(rawValue?: string): string {
       return parsed.allComposers[0].name ?? 'Chat'
     }
   } catch (error) {
-    debugLog('Failed to parse chat value JSON for preview:', error)
+    // debugLog('Failed to parse chat value JSON for preview:', error)
   }
 
   return 'Chat'
@@ -88,15 +88,15 @@ app.whenReady().then(createWindow)
 ipcMain.handle('get-workspaces', async () => {
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
   const wsDir = path.join(appData, 'Cursor', 'User', 'workspaceStorage')
-  debugLog('Scanning workspace storage:', wsDir)
+  // debugLog('Scanning workspace storage:', wsDir)
   if (!fs.existsSync(wsDir)) {
-    debugLog('Workspace storage directory does not exist')
+    // debugLog('Workspace storage directory does not exist')
     return []
   }
 
   const workspaces: any[] = []
   const folders = fs.readdirSync(wsDir).filter(f => f.length === 32)
-  debugLog('Found workspace folder count:', folders.length)
+  // debugLog('Found workspace folder count:', folders.length)
 
   for (const hash of folders) {
     const folderPath = path.join(wsDir, hash)
@@ -123,32 +123,32 @@ ipcMain.handle('get-workspaces', async () => {
           .prepare(`SELECT key, value FROM ItemTable WHERE key IN ('composer.composerData', 'workbench.panel.aichat.view.aichat.chatdata') LIMIT 1`)
           .get() as { key?: string; value?: string } | undefined
 
-        debugLog('Workspace', hash, 'primary row key:', row?.key ?? 'none')
+        // debugLog('Workspace', hash, 'primary row key:', row?.key ?? 'none')
         chatCount = getChatCountFromValue(row?.value)
-        debugLog('Workspace', hash, 'count from primary row:', chatCount)
+        // debugLog('Workspace', hash, 'count from primary row:', chatCount)
 
         if (chatCount === 0) {
           const paneCount = db.prepare("SELECT COUNT(*) as count FROM ItemTable WHERE key LIKE 'workbench.panel.composerChatViewPane.%'").get() as { count?: number } | undefined
           chatCount = paneCount?.count ?? 0
-          debugLog('Workspace', hash, 'fallback pane count:', chatCount)
+          // debugLog('Workspace', hash, 'fallback pane count:', chatCount)
 
           if (chatCount === 0) {
             const keySamples = db
               .prepare("SELECT key FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%' ORDER BY key LIMIT 10")
               .all() as { key: string }[]
-            debugLog('Workspace', hash, 'chat/composer key samples:', keySamples.map(k => k.key))
+            // debugLog('Workspace', hash, 'chat/composer key samples:', keySamples.map(k => k.key))
           }
         }
 
         db.close()
       } catch (error) {
-        debugLog('Workspace', hash, 'database read failed:', error)
+        // debugLog('Workspace', hash, 'database read failed:', error)
       }
     } else {
-      debugLog('Workspace', hash, 'missing state.vscdb at', dbPath)
+      // debugLog('Workspace', hash, 'missing state.vscdb at', dbPath)
     }
 
-    debugLog('Workspace', hash, 'final chatCount:', chatCount, 'projectPath:', projectPath)
+    // debugLog('Workspace', hash, 'final chatCount:', chatCount, 'projectPath:', projectPath)
 
     workspaces.push({ hash, projectPath, chatCount, lastModified, dbPath })
   }
