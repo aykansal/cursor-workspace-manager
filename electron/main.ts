@@ -188,7 +188,10 @@ function readAgentTranscript(transcriptPath: string): string {
       try {
         const parsed = JSON.parse(line) as Record<string, unknown>
         const role = toText(parsed.role) ?? 'assistant'
-        const text = extractTextContent(parsed.message).join('\n').trim()
+        const text = extractTextContent(parsed.message)
+          .join('\n')
+          .replace(/\[REDACTED\]/gi, '')
+          .trim()
         if (!text) return []
 
         const speaker =
