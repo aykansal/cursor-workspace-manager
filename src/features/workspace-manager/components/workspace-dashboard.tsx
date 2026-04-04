@@ -48,25 +48,28 @@ type TranscriptMessage = {
 
 function parseTranscriptBlocks(content: string): TranscriptBlock[] {
   const parts = content.split(/```/)
+  const blocks: TranscriptBlock[] = []
 
-  return parts.flatMap((part, index) => {
+  parts.forEach((part, index) => {
     if (index % 2 === 1) {
       const [languageLine, ...codeLines] = part.split('\n')
-      return [
-        {
-          type: 'code' as const,
-          language: languageLine.trim(),
-          content: codeLines.join('\n').trim(),
-        },
-      ]
+      blocks.push({
+        type: 'code',
+        language: languageLine.trim(),
+        content: codeLines.join('\n').trim(),
+      })
+      return
     }
 
-    return part
+    const textBlocks = part
       .split(/\n\s*\n/)
       .map((chunk) => chunk.trim())
       .filter(Boolean)
       .map((chunk) => ({ type: 'text' as const, content: chunk }))
+    blocks.push(...textBlocks)
   })
+
+  return blocks
 }
 
 function normalizeMessageText(content: string) {
@@ -87,7 +90,7 @@ function parseTranscriptMessages(content: string): TranscriptMessage[] {
 
     const body = normalizeMessageText(current.bodyLines.join('\n').trim())
     if (body) {
-      const previousMessage = messages.at(-1)
+      const previousMessage = messages[messages.length - 1]
 
       if (previousMessage && previousMessage.role === current.role) {
         previousMessage.bodyLines.push(body)
@@ -287,7 +290,7 @@ export function WorkspaceDashboard({
             <Combobox
               value={targetWorkspaceHash}
               onValueChange={(value) => {
-                setTargetWorkspaceHash(value)
+                setTargetWorkspaceHash(value ?? '')
               }}
             >
               <ComboboxTrigger

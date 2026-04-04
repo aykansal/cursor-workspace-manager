@@ -1,11 +1,37 @@
 {
   "name": "cursor-workspace-manager",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
+  "description": "Desktop app to inspect Cursor IDE workspaces, explore AI chat history, analyze SQLite data, and transfer conversations across projects.",
+  "homepage": "https://github.com/aykansal/cursor-workspace-manager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aykansal/cursor-workspace-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aykansal/cursor-workspace-manager/issues"
+  },
+  "keywords": [
+    "cursor",
+    "cursor ide",
+    "cursor ai",
+    "workspace manager",
+    "ai chat viewer",
+    "sqlite viewer",
+    "developer tools",
+    "electron app",
+    "productivity",
+    "ai agents",
+    "skills",
+    "harness",
+    "agents",
+    "ai"
+  ],
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",
+    "stop:prod": "cmd /c taskkill /IM \"Cursor Workspace Manager.exe\" /F >nul 2>&1 || exit /b 0",
+    "rebuild:prod": "pnpm stop:prod && pnpm build",
+    "start:prod": "cmd /c start \"\" \"dist\\win-unpacked\\Cursor Workspace Manager.exe\"",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "dist": "npm run build"

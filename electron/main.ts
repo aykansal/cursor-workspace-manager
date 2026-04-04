@@ -221,6 +221,10 @@ type ComposerData = {
   [key: string]: unknown
 }
 
+function isComposerRecord(value: ComposerRecord | null): value is ComposerRecord {
+  return value !== null
+}
+
 function extractComposerRecords(rawValue?: string, projectPath?: string): ComposerRecord[] {
   if (!rawValue) return []
 
@@ -233,7 +237,7 @@ function extractComposerRecords(rawValue?: string, projectPath?: string): Compos
 
     return parsed.allComposers
       .filter((composer) => composer && typeof composer === 'object')
-      .map((composer, index) => {
+      .map<ComposerRecord | null>((composer, index) => {
         const composerId = toText(composer.composerId) ?? `composer-${index + 1}`
         const name = toText(composer.name) ?? toText(composer.title)
         const subtitle = toText(composer.subtitle)
@@ -270,7 +274,7 @@ function extractComposerRecords(rawValue?: string, projectPath?: string): Compos
           updatedAt: toIsoDate(composer.lastUpdatedAt ?? composer.updatedAt ?? composer.createdAt ?? null),
         } satisfies ComposerRecord
       })
-      .filter((composer): composer is ComposerRecord => Boolean(composer))
+      .filter(isComposerRecord)
   } catch {
     return []
   }
@@ -376,6 +380,24 @@ function getWorkspaceInfo(hash: string) {
   }
 }
 
+function getProjectPathFromDbPath(dbPath: string) {
+  const workspaceDir = path.dirname(dbPath)
+  const workspaceJsonPath = path.join(workspaceDir, 'workspace.json')
+
+  if (!fs.existsSync(workspaceJsonPath)) {
+    return 'Unknown'
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(workspaceJsonPath, 'utf8')) as { folder?: string }
+    return data.folder
+      ? decodeURIComponent(data.folder.replace('file:///', ''))
+      : 'Multi-folder workspace'
+  } catch {
+    return 'Unknown'
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -394,7 +416,7 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173')
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 }
 
@@ -572,7 +594,8 @@ ipcMain.handle('transfer-chats', async (_, { sourceHash, targetHash, composerId 
 ipcMain.handle('get-chat-preview', async (_, dbPath) => {
   try {
     const db = new Database(dbPath, { readonly: true })
-    const rows = getWorkspaceChats(db)
+    const projectPath = getProjectPathFromDbPath(dbPath)
+    const rows = getWorkspaceChats(db, projectPath)
     db.close()
     return rows
   } catch {

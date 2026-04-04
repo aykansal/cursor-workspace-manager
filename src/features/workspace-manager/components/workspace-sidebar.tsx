@@ -9,17 +9,15 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarInput,
-  SidebarSeparator,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
-import { ChevronRightIcon, FileIcon, FolderIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
+import { ChevronRightIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
 import { getProjectName } from '../lib/workspace-utils'
 
 type WorkspaceSidebarProps = {
   activeWorkspaceHash: string | null
   hasMore: boolean
   items: Workspace[]
-  searchIsStale: boolean
   searchQuery: string
   selectedTranscriptId: string | null
   sourceHash: string | null
@@ -89,7 +87,6 @@ export function WorkspaceSidebar({
   activeWorkspaceHash,
   hasMore,
   items,
-  searchIsStale,
   searchQuery,
   selectedTranscriptId,
   sourceHash,
@@ -161,12 +158,11 @@ export function WorkspaceSidebar({
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
           >
             <ChevronRightIcon className={cn('transition-transform', isOpen && 'rotate-90')} />
-            <FolderIcon className="text-sidebar-foreground/70" />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm">{item.name}</span>
-              <span className="block truncate text-xs text-sidebar-foreground/45">
+              {/* <span className="block truncate text-xs text-sidebar-foreground/45">
                 {item.meta}
-              </span>
+              </span> */}
             </span>
             {item.isSource ? (
               <span className="size-2 shrink-0 rounded-full bg-sidebar-primary" />
@@ -203,7 +199,6 @@ export function WorkspaceSidebar({
         )}
         style={{ paddingLeft: `${depth * 12 + 20}px` }}
       >
-        <FileIcon />
         <span className="truncate text-sm">{item.name}</span>
       </Button>
     )
@@ -243,8 +238,6 @@ export function WorkspaceSidebar({
         </div>
       </SidebarHeader>
 
-      <SidebarSeparator />
-
       <SidebarContent className="workspace-scroll px-2 py-2" onScroll={handleScroll}>
         <div className="flex flex-col gap-1">
           {fileTree.length > 0 ? (
@@ -259,7 +252,7 @@ export function WorkspaceSidebar({
 
       <SidebarFooter className="px-3 py-3">
         <div className="rounded-lg border border-sidebar-border/60 bg-sidebar px-3 py-2 text-xs text-sidebar-foreground/50">
-          {searchIsStale ? 'Refreshing results...' : hasMore ? `${items.length}+ visible locally` : `${items.length} visible locally`}
+          {hasMore ? `${items.length}+ visible locally` : `${items.length} visible locally`}
         </div>
       </SidebarFooter>
     </Sidebar>
