@@ -6,7 +6,7 @@ declare global {
 	interface Window {
 		electronAPI: {
 			getWorkspaces: () => Promise<Workspace[]>
-			getWorkspaceTranscripts: (dbPath: string) => Promise<WorkspaceTranscript[]>
+			getWorkspaceTranscripts: (workspace: { dbPath: string; projectPath: string }) => Promise<WorkspaceTranscript[]>
 			transferChats: (sourceHash: string, targetHash: string) => Promise<TransferResult>
 			getChatPreview: (dbPath: string) => Promise<unknown>
 		}

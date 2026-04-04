@@ -15,6 +15,7 @@ export interface WorkspaceTranscript {
   title: string
   summary: string | null
   content: string
+  transcriptPath: string
   updatedAt: string | null
 }
 
@@ -26,8 +27,8 @@ export interface TransferResult {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaces: () => ipcRenderer.invoke('get-workspaces') as Promise<Workspace[]>,
-  getWorkspaceTranscripts: (dbPath: string) =>
-    ipcRenderer.invoke('get-workspace-transcripts', dbPath) as Promise<WorkspaceTranscript[]>,
+  getWorkspaceTranscripts: (workspace: { dbPath: string; projectPath: string }) =>
+    ipcRenderer.invoke('get-workspace-transcripts', workspace) as Promise<WorkspaceTranscript[]>,
   transferChats: (sourceHash: string, targetHash: string) =>
     ipcRenderer.invoke('transfer-chats', { sourceHash, targetHash }) as Promise<TransferResult>,
   getChatPreview: (dbPath: string) => ipcRenderer.invoke('get-chat-preview', dbPath)

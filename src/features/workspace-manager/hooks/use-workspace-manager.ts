@@ -115,7 +115,10 @@ export function useWorkspaceManager() {
     setTranscriptError(null)
 
     try {
-      const transcripts = await window.electronAPI.getWorkspaceTranscripts(workspace.dbPath)
+      const transcripts = await window.electronAPI.getWorkspaceTranscripts({
+        dbPath: workspace.dbPath,
+        projectPath: workspace.projectPath,
+      })
       setTranscriptsByWorkspace((current) => ({ ...current, [workspace.hash]: transcripts }))
       setSelectedTranscriptId((currentId) => {
         if (currentId && transcripts.some((transcript) => transcript.id === currentId)) {

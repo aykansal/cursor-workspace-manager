@@ -24,6 +24,7 @@ type WorkspaceTranscript = {
   title: string
   summary: string | null
   content: string
+  transcriptPath: string
   updatedAt: string | null
 }
 
@@ -51,45 +52,161 @@ function toText(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
+function toCursorProjectSlug(projectPath: string): string {
+  return projectPath
+    .replace(/\\/g, '/')
+    .replace(/^([a-zA-Z]):/, (_, drive: string) => drive.toLowerCase())
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => segment.replace(/[^a-zA-Z0-9.-]+/g, '-').replace(/-+/g, '-'))
+    .join('-')
+}
+
+function getWslRemoteInfo(projectPath: string): { distro: string; linuxPath: string } | null {
+  if (projectPath.startsWith('vscode-remote://wsl+')) {
+    const match = projectPath.match(/^vscode-remote:\/\/wsl\+([^/]+)(\/.*)$/)
+    if (!match) return null
+
+    return {
+      distro: decodeURIComponent(match[1]),
+      linuxPath: match[2],
+    }
+  }
+
+  if (projectPath.startsWith('file://wsl.localhost/')) {
+    const match = projectPath.match(/^file:\/\/wsl\.localhost\/([^/]+)(\/.*)$/)
+    if (!match) return null
+
+    return {
+      distro: decodeURIComponent(match[1]),
+      linuxPath: match[2],
+    }
+  }
+
+  return null
+}
+
+function getCursorProjectRoots(projectPath: string): string[] {
+  const roots = [path.join(os.homedir(), '.cursor', 'projects')]
+  const wslInfo = getWslRemoteInfo(projectPath)
+
+  if (wslInfo) {
+    const segments = wslInfo.linuxPath.split('/').filter(Boolean)
+    if (segments[0] === 'home' && segments[1]) {
+      roots.unshift(
+        path.win32.join(
+          `\\\\wsl.localhost\\${wslInfo.distro}`,
+          'home',
+          segments[1],
+          '.cursor',
+          'projects'
+        )
+      )
+    }
+  }
+
+  return [...new Set(roots)]
+}
+
+function getTranscriptFilePath(projectPath: string, composerId: string): string {
+  const normalizedProjectPath = getWslRemoteInfo(projectPath)?.linuxPath ?? projectPath
+
+  return path.join(
+    getCursorProjectRoots(projectPath)[0],
+    toCursorProjectSlug(normalizedProjectPath),
+    'agent-transcripts',
+    composerId,
+    `${composerId}.jsonl`
+  )
+}
+
+function resolveTranscriptFilePath(projectPath: string, composerId: string): string {
+  const directPath = getTranscriptFilePath(projectPath, composerId)
+  if (fs.existsSync(directPath)) return directPath
+
+  for (const projectsRoot of getCursorProjectRoots(projectPath)) {
+    if (!fs.existsSync(projectsRoot)) continue
+
+    for (const projectDir of fs.readdirSync(projectsRoot)) {
+      const candidate = path.join(
+        projectsRoot,
+        projectDir,
+        'agent-transcripts',
+        composerId,
+        `${composerId}.jsonl`
+      )
+
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
+    }
+  }
+
+  return directPath
+}
+
+function extractTextContent(value: unknown): string[] {
+  if (!value) return []
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed ? [trimmed] : []
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractTextContent(entry))
+  }
+
+  if (typeof value !== 'object') return []
+
+  const record = value as Record<string, unknown>
+
+  if (record.type === 'text' && typeof record.text === 'string') {
+    return record.text.trim() ? [record.text.trim()] : []
+  }
+
+  if ('content' in record) {
+    return extractTextContent(record.content)
+  }
+
+  if ('text' in record && typeof record.text === 'string') {
+    return record.text.trim() ? [record.text.trim()] : []
+  }
+
+  return []
+}
+
+function readAgentTranscript(transcriptPath: string): string {
+  if (!fs.existsSync(transcriptPath)) return ''
+
+  return fs
+    .readFileSync(transcriptPath, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>
+        const role = toText(parsed.role) ?? 'assistant'
+        const text = extractTextContent(parsed.message).join('\n').trim()
+        if (!text) return []
+
+        const speaker =
+          role === 'user' ? 'User' : role === 'assistant' ? 'Assistant' : role[0].toUpperCase() + role.slice(1)
+
+        return [`${speaker}: ${text}`]
+      } catch {
+        return []
+      }
+    })
+    .join('\n\n')
+}
+
 type ComposerRecord = {
   composerId: string
   title: string
   summary: string | null
   updatedAt: string | null
-  isSelected: boolean
-  detailLines: string[]
-}
-
-function extractPromptLines(rawValue?: string): string[] {
-  if (!rawValue) return []
-
-  try {
-    const parsed = JSON.parse(rawValue) as Array<Record<string, unknown>>
-    if (!Array.isArray(parsed)) return []
-
-    return parsed
-      .map((entry) => toText(entry.text))
-      .filter((entry): entry is string => Boolean(entry))
-      .map((entry) => `User: ${entry}`)
-  } catch {
-    return []
-  }
-}
-
-function extractGenerationLines(rawValue?: string): string[] {
-  if (!rawValue) return []
-
-  try {
-    const parsed = JSON.parse(rawValue) as Array<Record<string, unknown>>
-    if (!Array.isArray(parsed)) return []
-
-    return parsed
-      .map((entry) => toText(entry.textDescription))
-      .filter((entry): entry is string => Boolean(entry))
-      .map((entry) => `Assistant: ${entry}`)
-  } catch {
-    return []
-  }
 }
 
 function extractComposerRecords(rawValue?: string): ComposerRecord[] {
@@ -98,15 +215,9 @@ function extractComposerRecords(rawValue?: string): ComposerRecord[] {
   try {
     const parsed = JSON.parse(rawValue) as {
       allComposers?: Array<Record<string, unknown>>
-      selectedComposerIds?: string[]
-      lastFocusedComposerIds?: string[]
     }
 
     if (!Array.isArray(parsed.allComposers)) return []
-
-    const selectedIds = new Set(
-      [...(parsed.selectedComposerIds ?? []), ...(parsed.lastFocusedComposerIds ?? [])].filter(Boolean)
-    )
 
     return parsed.allComposers
       .filter((composer) => composer && typeof composer === 'object')
@@ -125,28 +236,17 @@ function extractComposerRecords(rawValue?: string): ComposerRecord[] {
           typeof composer.contextUsagePercent === 'number'
             ? `${composer.contextUsagePercent.toFixed(1)}% context used`
             : null
-        const createdAt = toIsoDate(composer.createdAt ?? null)
 
         const title =
           name ??
           subtitle ??
           (unifiedMode ? `${unifiedMode[0].toUpperCase()}${unifiedMode.slice(1)} session ${index + 1}` : `Session ${index + 1}`)
 
-        const detailLines = [
-          subtitle,
-          modeLabel ? `Mode: ${modeLabel}` : null,
-          filesChanged,
-          contextUsage,
-          createdAt ? `Created: ${new Date(createdAt).toLocaleString()}` : null,
-        ].filter((entry): entry is string => Boolean(entry))
-
         return {
           composerId,
           title,
           summary: subtitle ?? modeLabel ?? filesChanged ?? contextUsage ?? null,
           updatedAt: toIsoDate(composer.lastUpdatedAt ?? composer.updatedAt ?? composer.createdAt ?? null),
-          isSelected: selectedIds.has(composerId),
-          detailLines,
         } satisfies ComposerRecord
       })
   } catch {
@@ -165,31 +265,23 @@ function getWorkspaceChats(db: InstanceType<typeof Database>): ChatEntry[] {
   }))
 }
 
-function getWorkspaceTranscripts(db: InstanceType<typeof Database>): WorkspaceTranscript[] {
+function getWorkspaceTranscripts(db: InstanceType<typeof Database>, projectPath: string): WorkspaceTranscript[] {
   const composerRow = db
     .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
     .get() as { value?: string } | undefined
-  const promptRow = db
-    .prepare(`SELECT value FROM ItemTable WHERE key = 'aiService.prompts'`)
-    .get() as { value?: string } | undefined
-  const generationRow = db
-    .prepare(`SELECT value FROM ItemTable WHERE key = 'aiService.generations'`)
-    .get() as { value?: string } | undefined
-
-  const promptLines = extractPromptLines(promptRow?.value)
-  const generationLines = extractGenerationLines(generationRow?.value)
   const composerRecords = extractComposerRecords(composerRow?.value)
 
   const transcripts = composerRecords.map((composer) => {
-    const relatedLines = composer.isSelected ? [...promptLines, ...generationLines] : []
-    const content = [...composer.detailLines, ...relatedLines].join('\n\n')
+    const transcriptPath = resolveTranscriptFilePath(projectPath, composer.composerId)
+    const transcriptBody = readAgentTranscript(transcriptPath)
 
     return {
       id: `composer:${composer.composerId}`,
-      sourceKey: 'composer.composerData',
+      sourceKey: composer.composerId,
       title: composer.title,
       summary: composer.summary,
-      content: content || composer.summary || composer.title,
+      content: transcriptBody || `Transcript file not found at ${transcriptPath}`,
+      transcriptPath,
       updatedAt: composer.updatedAt,
     } satisfies WorkspaceTranscript
   })
@@ -294,15 +386,16 @@ ipcMain.handle('get-workspaces', async () => {
   return workspaces.sort((a, b) => new Date(b.lastModified!).getTime() - new Date(a.lastModified!).getTime())
 })
 
-ipcMain.handle('get-workspace-transcripts', async (_, dbPath: string) => {
+ipcMain.handle('get-workspace-transcripts', async (_, workspace: { dbPath: string; projectPath: string }) => {
   try {
-    const db = new Database(dbPath, { readonly: true })
-    const transcripts = getWorkspaceTranscripts(db)
+    const db = new Database(workspace.dbPath, { readonly: true })
+    const transcripts = getWorkspaceTranscripts(db, workspace.projectPath)
     db.close()
     return transcripts
   } catch (error) {
     logger.error('Workspace transcript extraction failed:', {
-      dbPath,
+      dbPath: workspace.dbPath,
+      projectPath: workspace.projectPath,
       error: error instanceof Error ? error.message : String(error),
     })
     return []
