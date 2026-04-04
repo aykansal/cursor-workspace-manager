@@ -14,6 +14,7 @@ export function workspaceMatchesQuery(workspace: Workspace, query: string): bool
     workspace.projectPath,
     getProjectName(workspace.projectPath),
     String(workspace.chatCount),
+    workspace.chatPreviews.join(' '),
   ]
     .join(' ')
     .toLowerCase()

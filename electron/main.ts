@@ -5,36 +5,17 @@ import { createRequire } from 'module'
 import fs from 'fs'
 import os from 'os'
 import { is } from '@electron-toolkit/utils'
+import { logger } from './logger'
 
 let mainWindow: BrowserWindow | null = null
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const CHAT_DEBUG_PREFIX = '[CursorChatDebug]'
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 
-function debugLog(...args: unknown[]) {
-  console.log(CHAT_DEBUG_PREFIX, ...args)
-}
-
-function getChatCountFromValue(rawValue?: string): number {
-  if (!rawValue) return 0
-
-  try {
-    const parsed = JSON.parse(rawValue) as {
-      allComposers?: unknown[]
-      tabs?: unknown[]
-      composers?: unknown[]
-    }
-
-    if (Array.isArray(parsed.allComposers)) return parsed.allComposers.length
-    if (Array.isArray(parsed.tabs)) return parsed.tabs.length
-    if (Array.isArray(parsed.composers)) return parsed.composers.length
-  } catch (error) {
-    // debugLog('Failed to parse chat value JSON for count:', error)
-  }
-
-  return 0
+type ChatEntry = {
+  key: string
+  preview: string
 }
 
 function getChatPreviewFromValue(rawValue?: string): string {
@@ -58,6 +39,108 @@ function getChatPreviewFromValue(rawValue?: string): string {
   }
 
   return 'Chat'
+}
+
+function collectChatEntries(value: unknown, fallbackLabel = 'Chat'): string[] {
+  if (!value || typeof value !== 'object') return []
+
+  const entries: string[] = []
+  const seen = new Set<string>()
+
+  const addEntry = (raw: unknown) => {
+    if (!raw || typeof raw !== 'string') return
+
+    const trimmed = raw.trim()
+    if (!trimmed) return
+
+    const normalized = trimmed.toLowerCase()
+    if (seen.has(normalized)) return
+
+    seen.add(normalized)
+    entries.push(trimmed)
+  }
+
+  const addFromItems = (items: unknown, fields: string[]) => {
+    if (!Array.isArray(items)) return false
+
+    let added = false
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue
+
+      for (const field of fields) {
+        const candidate = (item as Record<string, unknown>)[field]
+        if (typeof candidate === 'string' && candidate.trim()) {
+          addEntry(candidate)
+          added = true
+          break
+        }
+      }
+    }
+
+    return added
+  }
+
+  const record = value as Record<string, unknown>
+
+  addFromItems(record.tabs, ['title', 'name', 'id'])
+  addFromItems(record.allComposers, ['name', 'title', 'id'])
+  addFromItems(record.composers, ['name', 'title', 'id'])
+  addFromItems(record.chatSessions, ['title', 'name', 'id'])
+  addFromItems(record.sessions, ['title', 'name', 'id'])
+
+  addEntry(record.title)
+  addEntry(record.name)
+
+  if (entries.length === 0 && fallbackLabel.trim()) {
+    entries.push(fallbackLabel)
+  }
+
+  return entries
+}
+
+function getWorkspaceChats(db: InstanceType<typeof Database>): ChatEntry[] {
+  const rows = db
+    .prepare(
+      `SELECT key, value
+       FROM ItemTable
+       WHERE key IN ('composer.composerData', 'workbench.panel.aichat.view.aichat.chatdata')
+          OR key LIKE 'workbench.panel.composerChatViewPane.%'
+          OR key LIKE '%chat%'
+          OR key LIKE '%composer%'`
+    )
+    .all() as Array<{ key: string; value?: string }>
+
+  const chats: ChatEntry[] = []
+  const seen = new Set<string>()
+
+  for (const row of rows) {
+    if (!row.key) continue
+
+    let previews: string[] = []
+
+    if (row.value) {
+      try {
+        const parsed = JSON.parse(row.value) as unknown
+        previews = collectChatEntries(parsed, getChatPreviewFromValue(row.value))
+      } catch {
+        previews = []
+      }
+    }
+
+    if (previews.length === 0 && row.key.startsWith('workbench.panel.composerChatViewPane.')) {
+      previews = ['Chat']
+    }
+
+    for (const preview of previews) {
+      const signature = `${row.key}::${preview.toLowerCase()}`
+      if (seen.has(signature)) continue
+
+      seen.add(signature)
+      chats.push({ key: row.key, preview })
+    }
+  }
+
+  return chats
 }
 
 function createWindow() {
@@ -88,15 +171,15 @@ app.whenReady().then(createWindow)
 ipcMain.handle('get-workspaces', async () => {
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
   const wsDir = path.join(appData, 'Cursor', 'User', 'workspaceStorage')
-  // debugLog('Scanning workspace storage:', wsDir)
+  logger.debug('Scanning workspace storage:', wsDir)
   if (!fs.existsSync(wsDir)) {
-    // debugLog('Workspace storage directory does not exist')
+    logger.warn('Workspace storage directory does not exist:', wsDir)
     return []
   }
 
   const workspaces: any[] = []
   const folders = fs.readdirSync(wsDir).filter(f => f.length === 32)
-  // debugLog('Found workspace folder count:', folders.length)
+  logger.debug('Found workspace folder count:', folders.length)
 
   for (const hash of folders) {
     const folderPath = path.join(wsDir, hash)
@@ -114,43 +197,39 @@ ipcMain.handle('get-workspaces', async () => {
     }
 
     let chatCount = 0
+    let chatPreviews: string[] = []
     let lastModified: string | null = null
     if (fs.existsSync(dbPath)) {
       lastModified = fs.statSync(dbPath).mtime.toISOString()
       try {
+        logger.debug('Opening workspace DB:', { hash, dbPath })
         const db = new Database(dbPath, { readonly: true })
-        const row = db
-          .prepare(`SELECT key, value FROM ItemTable WHERE key IN ('composer.composerData', 'workbench.panel.aichat.view.aichat.chatdata') LIMIT 1`)
-          .get() as { key?: string; value?: string } | undefined
+        const chats = getWorkspaceChats(db)
 
-        // debugLog('Workspace', hash, 'primary row key:', row?.key ?? 'none')
-        chatCount = getChatCountFromValue(row?.value)
-        // debugLog('Workspace', hash, 'count from primary row:', chatCount)
+        chatPreviews = chats.map((chat) => chat.preview)
+        chatCount = chatPreviews.length
 
-        if (chatCount === 0) {
-          const paneCount = db.prepare("SELECT COUNT(*) as count FROM ItemTable WHERE key LIKE 'workbench.panel.composerChatViewPane.%'").get() as { count?: number } | undefined
-          chatCount = paneCount?.count ?? 0
-          // debugLog('Workspace', hash, 'fallback pane count:', chatCount)
-
-          if (chatCount === 0) {
-            const keySamples = db
-              .prepare("SELECT key FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%' ORDER BY key LIMIT 10")
-              .all() as { key: string }[]
-            // debugLog('Workspace', hash, 'chat/composer key samples:', keySamples.map(k => k.key))
-          }
-        }
+        logger.debug('Workspace scan result:', {
+          hash,
+          chatCount,
+          chatPreviewSample: chatPreviews.slice(0, 5),
+        })
 
         db.close()
       } catch (error) {
-        // debugLog('Workspace', hash, 'database read failed:', error)
+        logger.error('Workspace database read failed:', {
+          hash,
+          dbPath,
+          error: error instanceof Error ? error.message : String(error),
+        })
       }
     } else {
-      // debugLog('Workspace', hash, 'missing state.vscdb at', dbPath)
+      logger.warn('Workspace missing state.vscdb:', { hash, dbPath })
     }
 
-    // debugLog('Workspace', hash, 'final chatCount:', chatCount, 'projectPath:', projectPath)
+    logger.debug('Workspace final result:', { hash, projectPath, chatCount })
 
-    workspaces.push({ hash, projectPath, chatCount, lastModified, dbPath })
+    workspaces.push({ hash, projectPath, chatCount, chatPreviews, lastModified, dbPath })
   }
   return workspaces.sort((a, b) => new Date(b.lastModified!).getTime() - new Date(a.lastModified!).getTime())
 })
@@ -191,12 +270,9 @@ ipcMain.handle('transfer-chats', async (_, { sourceHash, targetHash }) => {
 ipcMain.handle('get-chat-preview', async (_, dbPath) => {
   try {
     const db = new Database(dbPath, { readonly: true })
-    const rows = db.prepare("SELECT key, value FROM ItemTable WHERE key = 'composer.composerData' OR key = 'workbench.panel.aichat.view.aichat.chatdata'").all() as { key: string; value?: string }[]
+    const rows = getWorkspaceChats(db)
     db.close()
-    return rows.map(r => ({
-      key: r.key,
-      preview: getChatPreviewFromValue(r.value)
-    }))
+    return rows
   } catch {
     return []
   }

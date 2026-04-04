@@ -17,6 +17,7 @@
     "better-sqlite3": "^12.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "electron-log": "^5.4.3",
     "lucide-react": "^1.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
