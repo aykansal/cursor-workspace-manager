@@ -18,129 +18,189 @@ type ChatEntry = {
   preview: string
 }
 
-function getChatPreviewFromValue(rawValue?: string): string {
-  if (!rawValue) return 'No preview'
+type WorkspaceTranscript = {
+  id: string
+  sourceKey: string
+  title: string
+  summary: string | null
+  content: string
+  updatedAt: string | null
+}
+
+function toIsoDate(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const normalized = value < 10_000_000_000 ? value * 1000 : value
+    const date = new Date(normalized)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+
+  if (typeof value === 'string') {
+    const asNumber = Number(value)
+    if (!Number.isNaN(asNumber)) return toIsoDate(asNumber)
+
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+
+  return null
+}
+
+function toText(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+type ComposerRecord = {
+  composerId: string
+  title: string
+  summary: string | null
+  updatedAt: string | null
+  isSelected: boolean
+  detailLines: string[]
+}
+
+function extractPromptLines(rawValue?: string): string[] {
+  if (!rawValue) return []
+
+  try {
+    const parsed = JSON.parse(rawValue) as Array<Record<string, unknown>>
+    if (!Array.isArray(parsed)) return []
+
+    return parsed
+      .map((entry) => toText(entry.text))
+      .filter((entry): entry is string => Boolean(entry))
+      .map((entry) => `User: ${entry}`)
+  } catch {
+    return []
+  }
+}
+
+function extractGenerationLines(rawValue?: string): string[] {
+  if (!rawValue) return []
+
+  try {
+    const parsed = JSON.parse(rawValue) as Array<Record<string, unknown>>
+    if (!Array.isArray(parsed)) return []
+
+    return parsed
+      .map((entry) => toText(entry.textDescription))
+      .filter((entry): entry is string => Boolean(entry))
+      .map((entry) => `Assistant: ${entry}`)
+  } catch {
+    return []
+  }
+}
+
+function extractComposerRecords(rawValue?: string): ComposerRecord[] {
+  if (!rawValue) return []
 
   try {
     const parsed = JSON.parse(rawValue) as {
-      tabs?: Array<{ title?: string }>
-      allComposers?: Array<{ name?: string }>
+      allComposers?: Array<Record<string, unknown>>
+      selectedComposerIds?: string[]
+      lastFocusedComposerIds?: string[]
     }
 
-    if (Array.isArray(parsed.tabs) && parsed.tabs.length > 0) {
-      return parsed.tabs[0].title ?? 'Chat'
-    }
+    if (!Array.isArray(parsed.allComposers)) return []
 
-    if (Array.isArray(parsed.allComposers) && parsed.allComposers.length > 0) {
-      return parsed.allComposers[0].name ?? 'Chat'
-    }
-  } catch (error) {
-    // debugLog('Failed to parse chat value JSON for preview:', error)
+    const selectedIds = new Set(
+      [...(parsed.selectedComposerIds ?? []), ...(parsed.lastFocusedComposerIds ?? [])].filter(Boolean)
+    )
+
+    return parsed.allComposers
+      .filter((composer) => composer && typeof composer === 'object')
+      .map((composer, index) => {
+        const composerId = toText(composer.composerId) ?? `composer-${index + 1}`
+        const name = toText(composer.name) ?? toText(composer.title)
+        const subtitle = toText(composer.subtitle)
+        const unifiedMode = toText(composer.unifiedMode)
+        const forceMode = toText(composer.forceMode)
+        const modeLabel = [unifiedMode, forceMode].filter(Boolean).join(' / ')
+        const filesChanged =
+          typeof composer.filesChangedCount === 'number'
+            ? `${composer.filesChangedCount} files changed`
+            : null
+        const contextUsage =
+          typeof composer.contextUsagePercent === 'number'
+            ? `${composer.contextUsagePercent.toFixed(1)}% context used`
+            : null
+        const createdAt = toIsoDate(composer.createdAt ?? null)
+
+        const title =
+          name ??
+          subtitle ??
+          (unifiedMode ? `${unifiedMode[0].toUpperCase()}${unifiedMode.slice(1)} session ${index + 1}` : `Session ${index + 1}`)
+
+        const detailLines = [
+          subtitle,
+          modeLabel ? `Mode: ${modeLabel}` : null,
+          filesChanged,
+          contextUsage,
+          createdAt ? `Created: ${new Date(createdAt).toLocaleString()}` : null,
+        ].filter((entry): entry is string => Boolean(entry))
+
+        return {
+          composerId,
+          title,
+          summary: subtitle ?? modeLabel ?? filesChanged ?? contextUsage ?? null,
+          updatedAt: toIsoDate(composer.lastUpdatedAt ?? composer.updatedAt ?? composer.createdAt ?? null),
+          isSelected: selectedIds.has(composerId),
+          detailLines,
+        } satisfies ComposerRecord
+      })
+  } catch {
+    return []
   }
-
-  return 'Chat'
-}
-
-function collectChatEntries(value: unknown, fallbackLabel = 'Chat'): string[] {
-  if (!value || typeof value !== 'object') return []
-
-  const entries: string[] = []
-  const seen = new Set<string>()
-
-  const addEntry = (raw: unknown) => {
-    if (!raw || typeof raw !== 'string') return
-
-    const trimmed = raw.trim()
-    if (!trimmed) return
-
-    const normalized = trimmed.toLowerCase()
-    if (seen.has(normalized)) return
-
-    seen.add(normalized)
-    entries.push(trimmed)
-  }
-
-  const addFromItems = (items: unknown, fields: string[]) => {
-    if (!Array.isArray(items)) return false
-
-    let added = false
-    for (const item of items) {
-      if (!item || typeof item !== 'object') continue
-
-      for (const field of fields) {
-        const candidate = (item as Record<string, unknown>)[field]
-        if (typeof candidate === 'string' && candidate.trim()) {
-          addEntry(candidate)
-          added = true
-          break
-        }
-      }
-    }
-
-    return added
-  }
-
-  const record = value as Record<string, unknown>
-
-  addFromItems(record.tabs, ['title', 'name', 'id'])
-  addFromItems(record.allComposers, ['name', 'title', 'id'])
-  addFromItems(record.composers, ['name', 'title', 'id'])
-  addFromItems(record.chatSessions, ['title', 'name', 'id'])
-  addFromItems(record.sessions, ['title', 'name', 'id'])
-
-  addEntry(record.title)
-  addEntry(record.name)
-
-  if (entries.length === 0 && fallbackLabel.trim()) {
-    entries.push(fallbackLabel)
-  }
-
-  return entries
 }
 
 function getWorkspaceChats(db: InstanceType<typeof Database>): ChatEntry[] {
-  const rows = db
-    .prepare(
-      `SELECT key, value
-       FROM ItemTable
-       WHERE key IN ('composer.composerData', 'workbench.panel.aichat.view.aichat.chatdata')
-          OR key LIKE 'workbench.panel.composerChatViewPane.%'
-          OR key LIKE '%chat%'
-          OR key LIKE '%composer%'`
-    )
-    .all() as Array<{ key: string; value?: string }>
+  const row = db
+    .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
+    .get() as { value?: string } | undefined
 
-  const chats: ChatEntry[] = []
-  const seen = new Set<string>()
+  return extractComposerRecords(row?.value).map((composer) => ({
+    key: composer.composerId,
+    preview: composer.title,
+  }))
+}
 
-  for (const row of rows) {
-    if (!row.key) continue
+function getWorkspaceTranscripts(db: InstanceType<typeof Database>): WorkspaceTranscript[] {
+  const composerRow = db
+    .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
+    .get() as { value?: string } | undefined
+  const promptRow = db
+    .prepare(`SELECT value FROM ItemTable WHERE key = 'aiService.prompts'`)
+    .get() as { value?: string } | undefined
+  const generationRow = db
+    .prepare(`SELECT value FROM ItemTable WHERE key = 'aiService.generations'`)
+    .get() as { value?: string } | undefined
 
-    let previews: string[] = []
+  const promptLines = extractPromptLines(promptRow?.value)
+  const generationLines = extractGenerationLines(generationRow?.value)
+  const composerRecords = extractComposerRecords(composerRow?.value)
 
-    if (row.value) {
-      try {
-        const parsed = JSON.parse(row.value) as unknown
-        previews = collectChatEntries(parsed, getChatPreviewFromValue(row.value))
-      } catch {
-        previews = []
-      }
-    }
+  const transcripts = composerRecords.map((composer) => {
+    const relatedLines = composer.isSelected ? [...promptLines, ...generationLines] : []
+    const content = [...composer.detailLines, ...relatedLines].join('\n\n')
 
-    if (previews.length === 0 && row.key.startsWith('workbench.panel.composerChatViewPane.')) {
-      previews = ['Chat']
-    }
+    return {
+      id: `composer:${composer.composerId}`,
+      sourceKey: 'composer.composerData',
+      title: composer.title,
+      summary: composer.summary,
+      content: content || composer.summary || composer.title,
+      updatedAt: composer.updatedAt,
+    } satisfies WorkspaceTranscript
+  })
 
-    for (const preview of previews) {
-      const signature = `${row.key}::${preview.toLowerCase()}`
-      if (seen.has(signature)) continue
+  transcripts.sort((a, b) => {
+    const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0
+    const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
+    return bTime - aTime
+  })
 
-      seen.add(signature)
-      chats.push({ key: row.key, preview })
-    }
-  }
-
-  return chats
+  return transcripts
 }
 
 function createWindow() {
@@ -232,6 +292,21 @@ ipcMain.handle('get-workspaces', async () => {
     workspaces.push({ hash, projectPath, chatCount, chatPreviews, lastModified, dbPath })
   }
   return workspaces.sort((a, b) => new Date(b.lastModified!).getTime() - new Date(a.lastModified!).getTime())
+})
+
+ipcMain.handle('get-workspace-transcripts', async (_, dbPath: string) => {
+  try {
+    const db = new Database(dbPath, { readonly: true })
+    const transcripts = getWorkspaceTranscripts(db)
+    db.close()
+    return transcripts
+  } catch (error) {
+    logger.error('Workspace transcript extraction failed:', {
+      dbPath,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
 })
 
 ipcMain.handle('transfer-chats', async (_, { sourceHash, targetHash }) => {
