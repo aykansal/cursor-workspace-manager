@@ -4,6 +4,7 @@ export interface Workspace {
   hash: string
   projectPath: string
   chatCount: number
+  chatPreviews: string[]
   lastModified: string | null
   dbPath: string
 }
