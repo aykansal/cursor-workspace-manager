@@ -1,25 +1,37 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Workspace, WorkspaceTranscript } from '../../../../electron/preload'
 import { Button } from '@/components/ui/button'
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxTrigger,
+  ComboboxValue,
+} from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { SidebarInset, SidebarTrigger } from '@/components/ui/sidebar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { DownloadIcon, MoveRightIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
+import { CheckIcon, DownloadIcon, FolderSearch2Icon, MoveRightIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
 import { TransferStatusAlert } from './transfer-status-alert'
 import { getProjectName } from '../lib/workspace-utils'
 
 type WorkspaceDashboardProps = {
   activeWorkspace: Workspace | undefined
   sourceHash: string | null
+  sourceComposerId: string | null
+  sourceComposerTitle: string | null
   sourceWorkspace: Workspace | undefined
+  workspaces: Workspace[]
   status: string
   transcriptError: string | null
   transcriptLoading: boolean
   transcriptCount: number
   selectedTranscript: WorkspaceTranscript | null
   onRefreshTranscripts: () => Promise<void> | void
-  onSelectSource: (hash: string) => void
+  onSelectSource: (hash: string, transcript: WorkspaceTranscript | null) => void
   onTransfer: (targetHash: string) => void
 }
 
@@ -147,7 +159,10 @@ function formatTime(value: string | null) {
 export function WorkspaceDashboard({
   activeWorkspace,
   sourceHash,
+  sourceComposerId,
+  sourceComposerTitle,
   sourceWorkspace,
+  workspaces,
   status,
   transcriptError,
   transcriptLoading,
@@ -158,10 +173,14 @@ export function WorkspaceDashboard({
   onTransfer,
 }: WorkspaceDashboardProps) {
   const [transcriptSearch, setTranscriptSearch] = useState('')
+  const [targetWorkspaceHash, setTargetWorkspaceHash] = useState('')
 
   const activeProjectName = activeWorkspace ? getProjectName(activeWorkspace.projectPath) : 'Workspace'
   const sourceProjectName = sourceWorkspace ? getProjectName(sourceWorkspace.projectPath) : null
-  const isActiveSource = Boolean(activeWorkspace && sourceHash === activeWorkspace.hash)
+  const isActiveSource =
+    Boolean(activeWorkspace && sourceHash === activeWorkspace.hash) &&
+    selectedTranscript?.sourceKey === sourceComposerId
+  const hasSourceChat = Boolean(sourceHash && sourceComposerId)
 
   const messages = useMemo(() => {
     if (!selectedTranscript) return []
@@ -175,6 +194,34 @@ export function WorkspaceDashboard({
       message.blocks.some((block) => block.content.toLowerCase().includes(query))
     )
   }, [selectedTranscript, transcriptSearch])
+
+  const targetWorkspaceOptions = useMemo(
+    () =>
+      workspaces
+        .filter((workspace) => workspace.hash !== sourceHash)
+        .map((workspace) => ({
+          value: workspace.hash,
+          label: getProjectName(workspace.projectPath),
+          description: workspace.projectPath,
+        })),
+    [sourceHash, workspaces]
+  )
+
+  useEffect(() => {
+    if (!hasSourceChat && targetWorkspaceHash) {
+      setTargetWorkspaceHash('')
+      return
+    }
+
+    if (hasSourceChat && sourceHash === targetWorkspaceHash) {
+      setTargetWorkspaceHash('')
+    }
+  }, [hasSourceChat, sourceHash, targetWorkspaceHash])
+
+  const selectedTargetWorkspace = useMemo(
+    () => targetWorkspaceOptions.find((workspace) => workspace.value === targetWorkspaceHash) ?? null,
+    [targetWorkspaceHash, targetWorkspaceOptions]
+  )
 
   return (
     <SidebarInset className="min-h-0 overflow-hidden border border-border/60 bg-[linear-gradient(180deg,hsl(0_0%_9%),hsl(0_0%_7%))]">
@@ -231,18 +278,59 @@ export function WorkspaceDashboard({
           <Button
             variant={isActiveSource ? 'secondary' : 'outline'}
             size="sm"
-            disabled={!activeWorkspace}
-            onClick={() => activeWorkspace && onSelectSource(activeWorkspace.hash)}
+            disabled={!activeWorkspace || !selectedTranscript}
+            onClick={() => activeWorkspace && onSelectSource(activeWorkspace.hash, selectedTranscript)}
           >
-            {isActiveSource ? 'Source selected' : 'Use as source'}
+            {isActiveSource ? 'Source selected' : 'Use this chat as source'}
           </Button>
+          {hasSourceChat ? (
+            <Combobox
+              value={targetWorkspaceHash}
+              onValueChange={(value) => {
+                setTargetWorkspaceHash(value)
+              }}
+            >
+              <ComboboxTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    className="min-w-[240px] justify-between"
+                  />
+                }
+              >
+                <FolderSearch2Icon data-icon="inline-start" />
+                <ComboboxValue placeholder="Choose transfer folder">
+                  {selectedTargetWorkspace?.label ?? 'Choose transfer folder'}
+                </ComboboxValue>
+              </ComboboxTrigger>
+              <ComboboxContent>
+                <ComboboxEmpty>No matching folders.</ComboboxEmpty>
+                <ComboboxList>
+                  {targetWorkspaceOptions.map((workspace) => (
+                    <ComboboxItem key={workspace.value} value={workspace.value}>
+                      <FolderSearch2Icon />
+                      <div className="min-w-0">
+                        <div className="truncate">{workspace.label}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {workspace.description}
+                        </div>
+                      </div>
+                      {workspace.value === targetWorkspaceHash ? <CheckIcon className="ml-auto" /> : null}
+                    </ComboboxItem>
+                  ))}
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
+          ) : null}
           <Button
             size="sm"
-            disabled={!activeWorkspace || !sourceHash || isActiveSource}
-            onClick={() => activeWorkspace && onTransfer(activeWorkspace.hash)}
+            disabled={!hasSourceChat || !targetWorkspaceHash}
+            onClick={() => onTransfer(targetWorkspaceHash)}
           >
             <MoveRightIcon data-icon="inline-start" />
-            {sourceProjectName ? `Transfer from ${sourceProjectName}` : 'Transfer here'}
+            {sourceProjectName
+              ? `Transfer ${sourceComposerTitle ?? 'chat'} from ${sourceProjectName}`
+              : 'Transfer here'}
           </Button>
         </div>
       </div>

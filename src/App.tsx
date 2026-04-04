@@ -20,8 +20,10 @@ function App() {
     searchQuery,
     selectedTranscript,
     setSearchQuery,
-    setSourceHash,
+    handleSetSourceSelection,
     sourceHash,
+    sourceComposerId,
+    sourceComposerTitle,
     status,
     transcriptError,
     transcriptLoading,
@@ -62,14 +64,17 @@ function App() {
       <WorkspaceDashboard
         activeWorkspace={activeWorkspace}
         sourceHash={sourceHash}
+        sourceComposerId={sourceComposerId}
+        sourceComposerTitle={sourceComposerTitle}
         sourceWorkspace={sourceWorkspace}
+        workspaces={workspaces}
         status={status}
         transcriptError={transcriptError}
         transcriptLoading={transcriptLoading}
         transcriptCount={activeTranscripts.length}
         selectedTranscript={selectedTranscript}
         onRefreshTranscripts={refreshActiveWorkspace}
-        onSelectSource={setSourceHash}
+        onSelectSource={handleSetSourceSelection}
         onTransfer={handleTransfer}
       />
     </SidebarProvider>

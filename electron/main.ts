@@ -212,7 +212,16 @@ type ComposerRecord = {
   updatedAt: string | null
 }
 
-function extractComposerRecords(rawValue?: string): ComposerRecord[] {
+type ComposerData = {
+  allComposers?: Array<Record<string, unknown>>
+  selectedComposerIds?: string[]
+  lastFocusedComposerIds?: string[]
+  hasMigratedComposerData?: boolean
+  hasMigratedMultipleComposers?: boolean
+  [key: string]: unknown
+}
+
+function extractComposerRecords(rawValue?: string, projectPath?: string): ComposerRecord[] {
   if (!rawValue) return []
 
   try {
@@ -245,6 +254,15 @@ function extractComposerRecords(rawValue?: string): ComposerRecord[] {
           subtitle ??
           (unifiedMode ? `${unifiedMode[0].toUpperCase()}${unifiedMode.slice(1)} session ${index + 1}` : `Session ${index + 1}`)
 
+        const hasVisibleMetadata = Boolean(name || subtitle)
+        const hasTranscript = projectPath
+          ? fs.existsSync(resolveTranscriptFilePath(projectPath, composerId))
+          : false
+
+        if (!hasVisibleMetadata && !hasTranscript) {
+          return null
+        }
+
         return {
           composerId,
           title,
@@ -252,17 +270,53 @@ function extractComposerRecords(rawValue?: string): ComposerRecord[] {
           updatedAt: toIsoDate(composer.lastUpdatedAt ?? composer.updatedAt ?? composer.createdAt ?? null),
         } satisfies ComposerRecord
       })
+      .filter((composer): composer is ComposerRecord => Boolean(composer))
   } catch {
     return []
   }
 }
 
-function getWorkspaceChats(db: InstanceType<typeof Database>): ChatEntry[] {
+function readComposerData(db: InstanceType<typeof Database>): ComposerData {
   const row = db
     .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
     .get() as { value?: string } | undefined
 
-  return extractComposerRecords(row?.value).map((composer) => ({
+  if (!row?.value) {
+    return {
+      allComposers: [],
+      selectedComposerIds: [],
+      lastFocusedComposerIds: [],
+      hasMigratedComposerData: true,
+      hasMigratedMultipleComposers: true,
+    }
+  }
+
+  try {
+    return JSON.parse(row.value) as ComposerData
+  } catch {
+    return {
+      allComposers: [],
+      selectedComposerIds: [],
+      lastFocusedComposerIds: [],
+      hasMigratedComposerData: true,
+      hasMigratedMultipleComposers: true,
+    }
+  }
+}
+
+function writeComposerData(db: InstanceType<typeof Database>, composerData: ComposerData) {
+  db.prepare('INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)').run(
+    'composer.composerData',
+    JSON.stringify(composerData)
+  )
+}
+
+function getWorkspaceChats(db: InstanceType<typeof Database>, projectPath: string): ChatEntry[] {
+  const row = db
+    .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
+    .get() as { value?: string } | undefined
+
+  return extractComposerRecords(row?.value, projectPath).map((composer) => ({
     key: composer.composerId,
     preview: composer.title,
   }))
@@ -272,7 +326,7 @@ function getWorkspaceTranscripts(db: InstanceType<typeof Database>, projectPath:
   const composerRow = db
     .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
     .get() as { value?: string } | undefined
-  const composerRecords = extractComposerRecords(composerRow?.value)
+  const composerRecords = extractComposerRecords(composerRow?.value, projectPath)
 
   const transcripts = composerRecords.map((composer) => {
     const transcriptPath = resolveTranscriptFilePath(projectPath, composer.composerId)
@@ -296,6 +350,30 @@ function getWorkspaceTranscripts(db: InstanceType<typeof Database>, projectPath:
   })
 
   return transcripts
+}
+
+function getWorkspaceInfo(hash: string) {
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+  const workspaceDir = path.join(appData, 'Cursor', 'User', 'workspaceStorage', hash)
+  const dbPath = path.join(workspaceDir, 'state.vscdb')
+  const workspaceJsonPath = path.join(workspaceDir, 'workspace.json')
+
+  let projectPath = 'Unknown'
+
+  if (fs.existsSync(workspaceJsonPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(workspaceJsonPath, 'utf8')) as { folder?: string }
+      projectPath = data.folder
+        ? decodeURIComponent(data.folder.replace('file:///', ''))
+        : 'Multi-folder workspace'
+    } catch {}
+  }
+
+  return {
+    dbPath,
+    projectPath,
+    workspaceDir,
+  }
 }
 
 function createWindow() {
@@ -359,7 +437,7 @@ ipcMain.handle('get-workspaces', async () => {
       try {
         logger.debug('Opening workspace DB:', { hash, dbPath })
         const db = new Database(dbPath, { readonly: true })
-        const chats = getWorkspaceChats(db)
+        const chats = getWorkspaceChats(db, projectPath)
 
         chatPreviews = chats.map((chat) => chat.preview)
         chatCount = chatPreviews.length
@@ -405,34 +483,87 @@ ipcMain.handle('get-workspace-transcripts', async (_, workspace: { dbPath: strin
   }
 })
 
-ipcMain.handle('transfer-chats', async (_, { sourceHash, targetHash }) => {
-  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
-  const wsDir = path.join(appData, 'Cursor', 'User', 'workspaceStorage')
-
-  const sourceDbPath = path.join(wsDir, sourceHash, 'state.vscdb')
-  const targetDbPath = path.join(wsDir, targetHash, 'state.vscdb')
+ipcMain.handle('transfer-chats', async (_, { sourceHash, targetHash, composerId }) => {
+  const sourceWorkspace = getWorkspaceInfo(sourceHash)
+  const targetWorkspace = getWorkspaceInfo(targetHash)
 
   const backupDir = path.join(os.homedir(), 'Desktop', 'Cursor-Backups')
   fs.mkdirSync(backupDir, { recursive: true })
-  fs.copyFileSync(sourceDbPath, path.join(backupDir, `backup-${sourceHash}-${Date.now()}.vscdb`))
-  fs.copyFileSync(targetDbPath, path.join(backupDir, `backup-${targetHash}-${Date.now()}.vscdb`))
+  fs.copyFileSync(sourceWorkspace.dbPath, path.join(backupDir, `backup-${sourceHash}-${Date.now()}.vscdb`))
+  fs.copyFileSync(targetWorkspace.dbPath, path.join(backupDir, `backup-${targetHash}-${Date.now()}.vscdb`))
 
   try {
-    const sourceDb = new Database(sourceDbPath)
-    const targetDb = new Database(targetDbPath)
+    const sourceDb = new Database(sourceWorkspace.dbPath)
+    const targetDb = new Database(targetWorkspace.dbPath)
 
-    const keys = ['composer.composerData', 'workbench.panel.aichat.view.aichat.chatdata']
+    const sourceComposerData = readComposerData(sourceDb)
+    const targetComposerData = readComposerData(targetDb)
 
-    for (const key of keys) {
-      const row = sourceDb.prepare('SELECT value FROM ItemTable WHERE key = ?').get(key) as { value?: string } | undefined
-      if (row?.value) {
-        targetDb.prepare('INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)').run(key, row.value)
+    const sourceComposer = (sourceComposerData.allComposers ?? []).find((composer) => {
+      if (!composer || typeof composer !== 'object') return false
+      return toText((composer as Record<string, unknown>).composerId) === composerId
+    })
+
+    if (!sourceComposer) {
+      sourceDb.close()
+      targetDb.close()
+      return { success: false, error: `Selected chat ${composerId} was not found in the source workspace.` }
+    }
+
+    const targetHasComposer = (targetComposerData.allComposers ?? []).some((composer) => {
+      if (!composer || typeof composer !== 'object') return false
+      return toText((composer as Record<string, unknown>).composerId) === composerId
+    })
+
+    if (targetHasComposer) {
+      sourceDb.close()
+      targetDb.close()
+      return { success: true, message: 'Chat already exists in the target workspace. Skipped.' }
+    }
+
+    const sourceTranscriptFile = resolveTranscriptFilePath(sourceWorkspace.projectPath, composerId)
+    const sourceTranscriptDir = path.dirname(sourceTranscriptFile)
+
+    if (!fs.existsSync(sourceTranscriptFile)) {
+      sourceDb.close()
+      targetDb.close()
+      return {
+        success: false,
+        error: `Transcript file missing for selected chat at ${sourceTranscriptFile}`,
       }
+    }
+
+    const targetTranscriptFile = getTranscriptFilePath(targetWorkspace.projectPath, composerId)
+    const targetTranscriptDir = path.dirname(targetTranscriptFile)
+
+    if (fs.existsSync(targetTranscriptDir)) {
+      sourceDb.close()
+      targetDb.close()
+      return { success: true, message: 'Chat already exists in the target workspace. Skipped.' }
+    }
+
+    fs.mkdirSync(path.dirname(targetTranscriptDir), { recursive: true })
+    fs.cpSync(sourceTranscriptDir, targetTranscriptDir, { recursive: true, force: false, errorOnExist: true })
+
+    try {
+      const nextComposerData: ComposerData = {
+        ...targetComposerData,
+        allComposers: [...(targetComposerData.allComposers ?? []), sourceComposer as Record<string, unknown>],
+      }
+
+      const transaction = targetDb.transaction(() => {
+        writeComposerData(targetDb, nextComposerData)
+      })
+
+      transaction()
+    } catch (error) {
+      fs.rmSync(targetTranscriptDir, { recursive: true, force: true })
+      throw error
     }
 
     sourceDb.close()
     targetDb.close()
-    return { success: true, message: '✅ Chats transferred! Open the target project in Cursor.' }
+    return { success: true, message: 'Chat copied to the target workspace.' }
   } catch (err: any) {
     return { success: false, error: err.message }
   }

@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaces: () => ipcRenderer.invoke('get-workspaces') as Promise<Workspace[]>,
   getWorkspaceTranscripts: (workspace: { dbPath: string; projectPath: string }) =>
     ipcRenderer.invoke('get-workspace-transcripts', workspace) as Promise<WorkspaceTranscript[]>,
-  transferChats: (sourceHash: string, targetHash: string) =>
-    ipcRenderer.invoke('transfer-chats', { sourceHash, targetHash }) as Promise<TransferResult>,
+  transferChats: (payload: { sourceHash: string; targetHash: string; composerId: string }) =>
+    ipcRenderer.invoke('transfer-chats', payload) as Promise<TransferResult>,
   getChatPreview: (dbPath: string) => ipcRenderer.invoke('get-chat-preview', dbPath)
 })

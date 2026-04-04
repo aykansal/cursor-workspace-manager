@@ -1,6 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { TransferResult, Workspace, WorkspaceTranscript } from '../../../../electron/preload'
-import { workspaceMatchesQuery } from '../lib/workspace-utils'
+import { getProjectName, workspaceMatchesQuery } from '../lib/workspace-utils'
 
 const WORKSPACE_PAGE_SIZE = 24
 
@@ -15,6 +15,8 @@ function sortByLastModifiedDesc(workspaces: Workspace[]): Workspace[] {
 export function useWorkspaceManager() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [sourceHash, setSourceHash] = useState<string | null>(null)
+  const [sourceComposerId, setSourceComposerId] = useState<string | null>(null)
+  const [sourceComposerTitle, setSourceComposerTitle] = useState<string | null>(null)
   const [status, setStatus] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [visibleWorkspaceCount, setVisibleWorkspaceCount] = useState(WORKSPACE_PAGE_SIZE)
@@ -38,7 +40,17 @@ export function useWorkspaceManager() {
     })
     setSourceHash((currentHash) => {
       if (!currentHash) return currentHash
-      return nextWorkspaces.some((workspace) => workspace.hash === currentHash) ? currentHash : null
+
+      const nextSourceHash = nextWorkspaces.some((workspace) => workspace.hash === currentHash)
+        ? currentHash
+        : null
+
+      if (!nextSourceHash) {
+        setSourceComposerId(null)
+        setSourceComposerTitle(null)
+      }
+
+      return nextSourceHash
     })
   }, [])
 
@@ -48,17 +60,34 @@ export function useWorkspaceManager() {
 
   const handleTransfer = useCallback(
     async (targetHash: string) => {
-      if (!sourceHash) return
-      if (!confirm(`Transfer chats from ${sourceHash} -> ${targetHash}?`)) return
+      if (!sourceHash || !sourceComposerId) {
+        setStatus('Select a source chat before transferring.')
+        return
+      }
 
-      const result: TransferResult = await window.electronAPI.transferChats(sourceHash, targetHash)
+      const sourceWorkspaceName =
+        getProjectName(workspaces.find((workspace) => workspace.hash === sourceHash)?.projectPath ?? '') ||
+        sourceHash
+      const targetWorkspaceName =
+        getProjectName(workspaces.find((workspace) => workspace.hash === targetHash)?.projectPath ?? '') ||
+        targetHash
+
+      const confirmed = confirm(
+        `Copy "${sourceComposerTitle ?? 'selected chat'}" from ${sourceWorkspaceName} into ${targetWorkspaceName}?`
+      )
+
+      if (!confirmed) return
+
+      const result: TransferResult = await window.electronAPI.transferChats({
+        sourceHash,
+        targetHash,
+        composerId: sourceComposerId,
+      })
       setStatus(result.success ? result.message ?? '' : `Transfer failed: ${result.error}`)
-      setSourceHash(null)
       setTranscriptsByWorkspace({})
-      setSelectedTranscriptId(null)
       await loadWorkspaces()
     },
-    [loadWorkspaces, sourceHash]
+    [loadWorkspaces, sourceComposerId, sourceComposerTitle, sourceHash, workspaces]
   )
 
   const selectedWorkspace = useMemo(
@@ -159,6 +188,21 @@ export function useWorkspaceManager() {
     []
   )
 
+  const handleSetSourceSelection = useCallback(
+    (workspaceHash: string, transcript: WorkspaceTranscript | null) => {
+      if (!transcript) {
+        setStatus('Open a chat first, then mark it as the source.')
+        return
+      }
+
+      setSourceHash(workspaceHash)
+      setSourceComposerId(transcript.sourceKey)
+      setSourceComposerTitle(transcript.title)
+      setStatus(`Source set to "${transcript.title}".`)
+    },
+    []
+  )
+
   const refreshActiveWorkspace = useCallback(async () => {
     if (!activeWorkspace) {
       await loadWorkspaces()
@@ -193,8 +237,10 @@ export function useWorkspaceManager() {
     selectedWorkspace,
     selectedTranscript,
     setSearchQuery,
-    setSourceHash,
+    handleSetSourceSelection,
     sourceHash,
+    sourceComposerId,
+    sourceComposerTitle,
     status,
     totalChats,
     transcriptError,

@@ -7,7 +7,7 @@ declare global {
 		electronAPI: {
 			getWorkspaces: () => Promise<Workspace[]>
 			getWorkspaceTranscripts: (workspace: { dbPath: string; projectPath: string }) => Promise<WorkspaceTranscript[]>
-			transferChats: (sourceHash: string, targetHash: string) => Promise<TransferResult>
+			transferChats: (payload: { sourceHash: string; targetHash: string; composerId: string }) => Promise<TransferResult>
 			getChatPreview: (dbPath: string) => Promise<unknown>
 		}
 	}

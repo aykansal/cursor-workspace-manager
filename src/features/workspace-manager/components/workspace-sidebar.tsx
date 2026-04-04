@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { UIEvent } from 'react'
 import type { Workspace, WorkspaceTranscript } from '../../../../electron/preload'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import {
   Sidebar,
   SidebarContent,
@@ -149,30 +149,29 @@ export function WorkspaceSidebar({
 
       return (
         <Collapsible key={item.id} open={isOpen}>
-          <CollapsibleTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={item.onSelect}
-              className={cn(
-                'group h-auto w-full justify-start gap-2 rounded-lg px-2 py-2 text-left transition-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                item.isActive && 'bg-sidebar-accent text-sidebar-accent-foreground'
-              )}
-              style={{ paddingLeft: `${depth * 12 + 8}px` }}
-            >
-              <ChevronRightIcon className={cn('transition-transform', isOpen && 'rotate-90')} />
-              <FolderIcon className="text-sidebar-foreground/70" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm">{item.name}</span>
-                <span className="block truncate text-xs text-sidebar-foreground/45">
-                  {item.meta}
-                </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={isOpen}
+            onClick={item.onSelect}
+            className={cn(
+              'group h-auto w-full justify-start gap-2 rounded-lg px-2 py-2 text-left transition-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              item.isActive && 'bg-sidebar-accent text-sidebar-accent-foreground'
+            )}
+            style={{ paddingLeft: `${depth * 12 + 8}px` }}
+          >
+            <ChevronRightIcon className={cn('transition-transform', isOpen && 'rotate-90')} />
+            <FolderIcon className="text-sidebar-foreground/70" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm">{item.name}</span>
+              <span className="block truncate text-xs text-sidebar-foreground/45">
+                {item.meta}
               </span>
-              {item.isSource ? (
-                <span className="size-2 shrink-0 rounded-full bg-sidebar-primary" />
-              ) : null}
-            </Button>
-          </CollapsibleTrigger>
+            </span>
+            {item.isSource ? (
+              <span className="size-2 shrink-0 rounded-full bg-sidebar-primary" />
+            ) : null}
+          </Button>
 
           <CollapsibleContent className={cn('mt-1', !isOpen && 'hidden')}>
             <div className="flex flex-col gap-1">
