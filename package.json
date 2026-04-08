@@ -33,6 +33,7 @@
     "rebuild:prod": "pnpm stop:prod && pnpm build",
     "start:prod": "cmd /c start \"\" \"dist\\win-unpacked\\Cursor Workspace Manager.exe\"",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "vitest run",
     "preview": "vite preview",
     "dist": "npm run build"
   },
@@ -61,18 +62,21 @@
     "@typescript-eslint/eslint-plugin": "^8.28.0",
     "@typescript-eslint/parser": "^8.28.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "@testing-library/react": "^16.3.0",
     "autoprefixer": "^10.4.21",
     "electron": "^41.0.4",
     "electron-builder": "^25.1.8",
     "eslint": "^9.23.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
+    "jsdom": "^26.1.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.8.2",
     "vite": "^6.2.3",
     "vite-plugin-electron": "^0.28.8",
-    "vite-plugin-electron-renderer": "^0.14.6"
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vitest": "^3.2.4"
   },
   "build": {
     "appId": "com.ayush.cursorworkspacemanager",

@@ -6,19 +6,20 @@ import { useWorkspaceManager } from '@/features/workspace-manager/hooks/use-work
 
 function App() {
   const {
-    activeTranscripts,
+    activeTranscriptSummaries,
     activeWorkspace,
     activeWorkspaceHash,
     hasMoreWorkspaces,
     handleTransfer,
     handleSelectTranscript,
     handleSelectWorkspace,
-    loadWorkspaces,
+    refreshWorkspaces,
     loadMoreWorkspaces,
     refreshActiveWorkspace,
-    searchIsStale,
+    scanState,
     searchQuery,
     selectedTranscript,
+    selectedTranscriptSummary,
     setSearchQuery,
     handleSetSourceSelection,
     sourceHash,
@@ -26,8 +27,9 @@ function App() {
     sourceComposerTitle,
     status,
     transcriptError,
-    transcriptLoading,
-    transcriptsByWorkspace,
+    transcriptDetailLoading,
+    transcriptListLoading,
+    transcriptSummariesByWorkspace,
     visibleWorkspaces,
     workspaces,
   } = useWorkspaceManager()
@@ -48,14 +50,14 @@ function App() {
         activeWorkspaceHash={activeWorkspaceHash}
         hasMore={hasMoreWorkspaces}
         items={visibleWorkspaces}
-        searchIsStale={searchIsStale}
         searchQuery={searchQuery}
-        selectedTranscriptId={selectedTranscript?.id ?? null}
+        selectedTranscriptId={selectedTranscriptSummary?.id ?? null}
+        scanState={scanState}
         sourceHash={sourceHash}
-        transcriptLoading={transcriptLoading}
-        transcriptsByWorkspace={transcriptsByWorkspace}
+        transcriptListLoading={transcriptListLoading}
+        transcriptSummariesByWorkspace={transcriptSummariesByWorkspace}
         onLoadMore={loadMoreWorkspaces}
-        onRefresh={loadWorkspaces}
+        onRefresh={refreshWorkspaces}
         onSearchChange={setSearchQuery}
         onSelectTranscript={handleSelectTranscript}
         onSelectWorkspace={handleSelectWorkspace}
@@ -69,10 +71,13 @@ function App() {
         sourceWorkspace={sourceWorkspace}
         workspaces={workspaces}
         status={status}
+        scanState={scanState}
         transcriptError={transcriptError}
-        transcriptLoading={transcriptLoading}
-        transcriptCount={activeTranscripts.length}
+        transcriptDetailLoading={transcriptDetailLoading}
+        transcriptListLoading={transcriptListLoading}
+        transcriptCount={activeTranscriptSummaries.length}
         selectedTranscript={selectedTranscript}
+        selectedTranscriptSummary={selectedTranscriptSummary}
         onRefreshTranscripts={refreshActiveWorkspace}
         onSelectSource={handleSetSourceSelection}
         onTransfer={handleTransfer}

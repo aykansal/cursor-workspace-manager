@@ -1,11 +1,11 @@
-import type { Workspace } from '../../../../electron/preload'
+import type { WorkspaceSummary } from '../../../../electron/preload'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { getProjectName } from '../lib/workspace-utils'
 
 type InspectorCardProps = {
-  selectedWorkspace?: Workspace
+  selectedWorkspace?: WorkspaceSummary
   sourceHash: string | null
 }
 
@@ -32,17 +32,7 @@ export function InspectorCard({ selectedWorkspace, sourceHash }: InspectorCardPr
         </div>
         <div className="flex flex-col gap-2">
           <span className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Detected Chats</span>
-          {selectedWorkspace?.chatPreviews?.length ? (
-            <div className="flex flex-wrap gap-2">
-              {selectedWorkspace.chatPreviews.map((chat, index) => (
-                <Badge key={`${chat}-${index}`} variant="secondary">
-                  {chat}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <span className="text-sm text-muted-foreground">No chats detected for this workspace.</span>
-          )}
+          <Badge variant="secondary">{selectedWorkspace?.chatCount ?? 0} chats indexed</Badge>
         </div>
         <div className="flex items-center gap-2 pt-1">
           <Badge variant="outline">1. Choose source</Badge>

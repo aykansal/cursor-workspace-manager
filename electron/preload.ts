@@ -1,35 +1,46 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  TranscriptDetail,
+  TranscriptSummary,
+  TransferPayload,
+  TransferResult,
+  WorkspaceScanState,
+  WorkspaceSummary,
+} from './contracts'
+import { WORKSPACE_SCAN_STATE_EVENT } from './contracts'
 
-export interface Workspace {
-  hash: string
-  projectPath: string
-  chatCount: number
-  chatPreviews: string[]
-  lastModified: string | null
-  dbPath: string
-}
-
-export interface WorkspaceTranscript {
-  id: string
-  sourceKey: string
-  title: string
-  summary: string | null
-  content: string
-  transcriptPath: string
-  updatedAt: string | null
-}
-
-export interface TransferResult {
-  success: boolean
-  message?: string
-  error?: string
-}
+export type {
+  TranscriptDetail,
+  TranscriptSummary,
+  TransferPayload,
+  TransferResult,
+  WorkspaceScanState,
+  WorkspaceSummary,
+} from './contracts'
+export type Workspace = WorkspaceSummary
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  getWorkspaces: () => ipcRenderer.invoke('get-workspaces') as Promise<Workspace[]>,
-  getWorkspaceTranscripts: (workspace: { dbPath: string; projectPath: string }) =>
-    ipcRenderer.invoke('get-workspace-transcripts', workspace) as Promise<WorkspaceTranscript[]>,
-  transferChats: (payload: { sourceHash: string; targetHash: string; composerId: string }) =>
-    ipcRenderer.invoke('transfer-chats', payload) as Promise<TransferResult>,
-  getChatPreview: (dbPath: string) => ipcRenderer.invoke('get-chat-preview', dbPath)
+  listWorkspaces: () => ipcRenderer.invoke('workspace:list') as Promise<WorkspaceSummary[]>,
+  refreshWorkspaces: () => ipcRenderer.invoke('workspace:refresh') as Promise<WorkspaceSummary[]>,
+  getWorkspaceScanState: () => ipcRenderer.invoke('workspace:scan-state') as Promise<WorkspaceScanState>,
+  onWorkspaceScanState: (listener: (state: WorkspaceScanState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: WorkspaceScanState) => {
+      listener(state)
+    }
+
+    ipcRenderer.on(WORKSPACE_SCAN_STATE_EVENT, wrapped)
+
+    return () => {
+      ipcRenderer.removeListener(WORKSPACE_SCAN_STATE_EVENT, wrapped)
+    }
+  },
+  listWorkspaceTranscripts: (workspaceHash: string) =>
+    ipcRenderer.invoke('workspace:transcripts', workspaceHash) as Promise<TranscriptSummary[]>,
+  getTranscriptDetail: (workspaceHash: string, transcriptId: string) =>
+    ipcRenderer.invoke('workspace:transcript-detail', {
+      workspaceHash,
+      transcriptId,
+    }) as Promise<TranscriptDetail | null>,
+  transferTranscript: (payload: TransferPayload) =>
+    ipcRenderer.invoke('workspace:transfer', payload) as Promise<TransferResult>,
 })

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { UIEvent } from 'react'
-import type { Workspace, WorkspaceTranscript } from '../../../../electron/preload'
+import type { TranscriptSummary, WorkspaceScanState, WorkspaceSummary } from '../../../../electron/preload'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import {
@@ -17,12 +17,13 @@ import { getProjectName } from '../lib/workspace-utils'
 type WorkspaceSidebarProps = {
   activeWorkspaceHash: string | null
   hasMore: boolean
-  items: Workspace[]
+  items: WorkspaceSummary[]
   searchQuery: string
   selectedTranscriptId: string | null
+  scanState: WorkspaceScanState
   sourceHash: string | null
-  transcriptLoading: boolean
-  transcriptsByWorkspace: Record<string, WorkspaceTranscript[]>
+  transcriptListLoading: boolean
+  transcriptSummariesByWorkspace: Record<string, TranscriptSummary[]>
   onLoadMore: () => void
   onRefresh: () => Promise<void> | void
   onSearchChange: (value: string) => void
@@ -67,12 +68,12 @@ function formatLastUpdated(value: string | null) {
 }
 
 function buildTranscriptItems(
-  workspace: Workspace,
-  transcriptsByWorkspace: Record<string, WorkspaceTranscript[]>,
+  workspace: WorkspaceSummary,
+  transcriptSummariesByWorkspace: Record<string, TranscriptSummary[]>,
   selectedTranscriptId: string | null,
   onSelectTranscript: (workspaceHash: string, transcriptId: string) => void
 ): FileTreeItem[] {
-  const transcripts = transcriptsByWorkspace[workspace.hash] ?? []
+  const transcripts = transcriptSummariesByWorkspace[workspace.hash] ?? []
 
   return transcripts.map((transcript) => ({
     kind: 'file' as const,
@@ -89,9 +90,10 @@ export function WorkspaceSidebar({
   items,
   searchQuery,
   selectedTranscriptId,
+  scanState,
   sourceHash,
-  transcriptLoading,
-  transcriptsByWorkspace,
+  transcriptListLoading,
+  transcriptSummariesByWorkspace,
   onLoadMore,
   onRefresh,
   onSearchChange,
@@ -127,7 +129,7 @@ export function WorkspaceSidebar({
     isSource: sourceHash === workspace.hash,
     items: buildTranscriptItems(
       workspace,
-      transcriptsByWorkspace,
+      transcriptSummariesByWorkspace,
       selectedTranscriptId,
       onSelectTranscript
     ),
@@ -178,7 +180,7 @@ export function WorkspaceSidebar({
                   className="px-2 py-1 text-xs text-sidebar-foreground/45"
                   style={{ paddingLeft: `${(depth + 1) * 12 + 24}px` }}
                 >
-                  {item.isActive && transcriptLoading ? 'Loading chats...' : 'No chats found'}
+                  {item.isActive && transcriptListLoading ? 'Loading chats...' : 'No chats found'}
                 </div>
               )}
             </div>
@@ -220,9 +222,10 @@ export function WorkspaceSidebar({
             variant="ghost"
             size="icon-sm"
             onClick={onRefresh}
+            disabled={scanState.status === 'scanning'}
             className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           >
-            <RefreshCwIcon />
+            <RefreshCwIcon className={cn(scanState.status === 'scanning' && 'animate-spin')} />
             <span className="sr-only">Refresh workspaces</span>
           </Button>
         </div>
@@ -252,7 +255,11 @@ export function WorkspaceSidebar({
 
       <SidebarFooter className="px-3 py-3">
         <div className="rounded-lg border border-sidebar-border/60 bg-sidebar px-3 py-2 text-xs text-sidebar-foreground/50">
-          {hasMore ? `${items.length}+ visible locally` : `${items.length} visible locally`}
+          {scanState.status === 'scanning'
+            ? 'Refreshing workspace index...'
+            : hasMore
+              ? `${items.length}+ visible locally`
+              : `${items.length} visible locally`}
         </div>
       </SidebarFooter>
     </Sidebar>

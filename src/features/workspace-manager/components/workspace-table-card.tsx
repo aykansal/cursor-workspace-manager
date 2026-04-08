@@ -1,4 +1,4 @@
-import type { Workspace } from "../../../../electron/preload";
+import type { WorkspaceSummary } from "../../../../electron/preload";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,7 +21,7 @@ import { PAGE_SIZE, getProjectName } from "../lib/workspace-utils";
 
 type WorkspaceTableCardProps = {
   currentPage: number;
-  items: Workspace[];
+  items: WorkspaceSummary[];
   sourceHash: string | null;
   searchIsStale: boolean;
   searchQuery: string;

@@ -1,14 +1,24 @@
 /// <reference types="vite/client" />
 
-import type { TransferResult, Workspace, WorkspaceTranscript } from '../electron/preload'
+import type {
+	TranscriptDetail,
+	TranscriptSummary,
+	TransferPayload,
+	TransferResult,
+	WorkspaceScanState,
+	WorkspaceSummary,
+} from '../electron/preload'
 
 declare global {
 	interface Window {
 		electronAPI: {
-			getWorkspaces: () => Promise<Workspace[]>
-			getWorkspaceTranscripts: (workspace: { dbPath: string; projectPath: string }) => Promise<WorkspaceTranscript[]>
-			transferChats: (payload: { sourceHash: string; targetHash: string; composerId: string }) => Promise<TransferResult>
-			getChatPreview: (dbPath: string) => Promise<unknown>
+			listWorkspaces: () => Promise<WorkspaceSummary[]>
+			refreshWorkspaces: () => Promise<WorkspaceSummary[]>
+			getWorkspaceScanState: () => Promise<WorkspaceScanState>
+			onWorkspaceScanState: (listener: (state: WorkspaceScanState) => void) => () => void
+			listWorkspaceTranscripts: (workspaceHash: string) => Promise<TranscriptSummary[]>
+			getTranscriptDetail: (workspaceHash: string, transcriptId: string) => Promise<TranscriptDetail | null>
+			transferTranscript: (payload: TransferPayload) => Promise<TransferResult>
 		}
 	}
 }

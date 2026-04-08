@@ -1,10 +1,16 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
-import type { TransferResult, Workspace, WorkspaceTranscript } from '../../../../electron/preload'
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  TranscriptDetail,
+  TranscriptSummary,
+  TransferResult,
+  WorkspaceScanState,
+  WorkspaceSummary,
+} from '../../../../electron/preload'
 import { getProjectName, workspaceMatchesQuery } from '../lib/workspace-utils'
 
 const WORKSPACE_PAGE_SIZE = 24
 
-function sortByLastModifiedDesc(workspaces: Workspace[]): Workspace[] {
+function sortByLastModifiedDesc(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
   return [...workspaces].sort((a, b) => {
     const aTime = a.lastModified ? new Date(a.lastModified).getTime() : 0
     const bTime = b.lastModified ? new Date(b.lastModified).getTime() : 0
@@ -13,7 +19,13 @@ function sortByLastModifiedDesc(workspaces: Workspace[]): Workspace[] {
 }
 
 export function useWorkspaceManager() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
+  const [scanState, setScanState] = useState<WorkspaceScanState>({
+    status: 'idle',
+    startedAt: null,
+    completedAt: null,
+    message: null,
+  })
   const [sourceHash, setSourceHash] = useState<string | null>(null)
   const [sourceComposerId, setSourceComposerId] = useState<string | null>(null)
   const [sourceComposerTitle, setSourceComposerTitle] = useState<string | null>(null)
@@ -22,73 +34,158 @@ export function useWorkspaceManager() {
   const [visibleWorkspaceCount, setVisibleWorkspaceCount] = useState(WORKSPACE_PAGE_SIZE)
   const [activeWorkspaceHash, setActiveWorkspaceHash] = useState<string | null>(null)
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string | null>(null)
-  const [transcriptsByWorkspace, setTranscriptsByWorkspace] = useState<Record<string, WorkspaceTranscript[]>>({})
-  const [transcriptLoading, setTranscriptLoading] = useState(false)
+  const [transcriptSummariesByWorkspace, setTranscriptSummariesByWorkspace] = useState<Record<string, TranscriptSummary[]>>({})
+  const [transcriptDetailsById, setTranscriptDetailsById] = useState<Record<string, TranscriptDetail>>({})
+  const [transcriptListLoadingByWorkspace, setTranscriptListLoadingByWorkspace] = useState<Record<string, boolean>>({})
+  const [transcriptDetailLoadingId, setTranscriptDetailLoadingId] = useState<string | null>(null)
   const [transcriptError, setTranscriptError] = useState<string | null>(null)
 
   const deferredSearchQuery = useDeferredValue(searchQuery)
+  const workspaceLoadRequestId = useRef(0)
+  const transcriptListRequestIdByWorkspace = useRef<Record<string, number>>({})
+  const transcriptDetailRequestId = useRef(0)
 
-  const loadWorkspaces = useCallback(async () => {
-    const nextWorkspaces = await window.electronAPI.getWorkspaces()
-    setWorkspaces(nextWorkspaces)
-    setActiveWorkspaceHash((currentHash) => {
-      if (currentHash && nextWorkspaces.some((workspace) => workspace.hash === currentHash)) {
-        return currentHash
-      }
+  const applyWorkspaces = useCallback((nextWorkspaces: WorkspaceSummary[]) => {
+    startTransition(() => {
+      setWorkspaces(nextWorkspaces)
+      setActiveWorkspaceHash((currentHash) => {
+        if (currentHash && nextWorkspaces.some((workspace) => workspace.hash === currentHash)) {
+          return currentHash
+        }
 
-      return nextWorkspaces[0]?.hash ?? null
-    })
-    setSourceHash((currentHash) => {
-      if (!currentHash) return currentHash
+        return nextWorkspaces[0]?.hash ?? null
+      })
+      setSourceHash((currentHash) => {
+        if (!currentHash) return currentHash
 
-      const nextSourceHash = nextWorkspaces.some((workspace) => workspace.hash === currentHash)
-        ? currentHash
-        : null
+        const nextSourceHash = nextWorkspaces.some((workspace) => workspace.hash === currentHash)
+          ? currentHash
+          : null
 
-      if (!nextSourceHash) {
-        setSourceComposerId(null)
-        setSourceComposerTitle(null)
-      }
+        if (!nextSourceHash) {
+          setSourceComposerId(null)
+          setSourceComposerTitle(null)
+        }
 
-      return nextSourceHash
+        return nextSourceHash
+      })
     })
   }, [])
 
-  useEffect(() => {
-    void loadWorkspaces()
-  }, [loadWorkspaces])
+  const loadWorkspaces = useCallback(async () => {
+    const requestId = ++workspaceLoadRequestId.current
+    const nextWorkspaces = await window.electronAPI.listWorkspaces()
 
-  const handleTransfer = useCallback(
-    async (targetHash: string) => {
-      if (!sourceHash || !sourceComposerId) {
-        setStatus('Select a source chat before transferring.')
-        return
+    if (requestId !== workspaceLoadRequestId.current) return
+    applyWorkspaces(nextWorkspaces)
+  }, [applyWorkspaces])
+
+  const refreshWorkspaces = useCallback(async () => {
+    const requestId = ++workspaceLoadRequestId.current
+    const nextWorkspaces = await window.electronAPI.refreshWorkspaces()
+
+    if (requestId !== workspaceLoadRequestId.current) return
+    applyWorkspaces(nextWorkspaces)
+  }, [applyWorkspaces])
+
+  const loadWorkspaceTranscripts = useCallback(
+    async (workspaceHash: string, options?: { force?: boolean }) => {
+      if (!options?.force && transcriptSummariesByWorkspace[workspaceHash]) {
+        return transcriptSummariesByWorkspace[workspaceHash]
       }
 
-      const sourceWorkspaceName =
-        getProjectName(workspaces.find((workspace) => workspace.hash === sourceHash)?.projectPath ?? '') ||
-        sourceHash
-      const targetWorkspaceName =
-        getProjectName(workspaces.find((workspace) => workspace.hash === targetHash)?.projectPath ?? '') ||
-        targetHash
+      const requestId = (transcriptListRequestIdByWorkspace.current[workspaceHash] ?? 0) + 1
+      transcriptListRequestIdByWorkspace.current[workspaceHash] = requestId
 
-      const confirmed = confirm(
-        `Copy "${sourceComposerTitle ?? 'selected chat'}" from ${sourceWorkspaceName} into ${targetWorkspaceName}?`
-      )
+      setTranscriptListLoadingByWorkspace((current) => ({ ...current, [workspaceHash]: true }))
+      setTranscriptError(null)
 
-      if (!confirmed) return
+      try {
+        const transcripts = await window.electronAPI.listWorkspaceTranscripts(workspaceHash)
 
-      const result: TransferResult = await window.electronAPI.transferChats({
-        sourceHash,
-        targetHash,
-        composerId: sourceComposerId,
-      })
-      setStatus(result.success ? result.message ?? '' : `Transfer failed: ${result.error}`)
-      setTranscriptsByWorkspace({})
-      await loadWorkspaces()
+        if (transcriptListRequestIdByWorkspace.current[workspaceHash] !== requestId) {
+          return transcripts
+        }
+
+        setTranscriptSummariesByWorkspace((current) => ({ ...current, [workspaceHash]: transcripts }))
+
+        if (workspaceHash === activeWorkspaceHash) {
+          setSelectedTranscriptId((currentId) => {
+            if (currentId && transcripts.some((transcript) => transcript.id === currentId)) {
+              return currentId
+            }
+
+            return transcripts[0]?.id ?? null
+          })
+        }
+
+        return transcripts
+      } catch (error) {
+        if (transcriptListRequestIdByWorkspace.current[workspaceHash] === requestId) {
+          setTranscriptError(error instanceof Error ? error.message : 'Unknown transcript error')
+          setTranscriptSummariesByWorkspace((current) => ({ ...current, [workspaceHash]: [] }))
+          if (workspaceHash === activeWorkspaceHash) {
+            setSelectedTranscriptId(null)
+          }
+        }
+
+        return []
+      } finally {
+        if (transcriptListRequestIdByWorkspace.current[workspaceHash] === requestId) {
+          setTranscriptListLoadingByWorkspace((current) => ({ ...current, [workspaceHash]: false }))
+        }
+      }
     },
-    [loadWorkspaces, sourceComposerId, sourceComposerTitle, sourceHash, workspaces]
+    [activeWorkspaceHash, transcriptSummariesByWorkspace]
   )
+
+  const loadTranscriptDetail = useCallback(
+    async (workspaceHash: string, transcriptId: string) => {
+      const existing = transcriptDetailsById[transcriptId]
+      if (existing) return existing
+
+      const requestId = ++transcriptDetailRequestId.current
+      setTranscriptDetailLoadingId(transcriptId)
+      setTranscriptError(null)
+
+      try {
+        const detail = await window.electronAPI.getTranscriptDetail(workspaceHash, transcriptId)
+        if (requestId !== transcriptDetailRequestId.current) return detail
+
+        if (detail) {
+          setTranscriptDetailsById((current) => ({ ...current, [transcriptId]: detail }))
+        }
+
+        return detail
+      } catch (error) {
+        if (requestId === transcriptDetailRequestId.current) {
+          setTranscriptError(error instanceof Error ? error.message : 'Unknown transcript error')
+        }
+
+        return null
+      } finally {
+        if (requestId === transcriptDetailRequestId.current) {
+          setTranscriptDetailLoadingId((current) => (current === transcriptId ? null : current))
+        }
+      }
+    },
+    [transcriptDetailsById]
+  )
+
+  useEffect(() => {
+    void loadWorkspaces()
+    void window.electronAPI.getWorkspaceScanState().then(setScanState)
+
+    const unsubscribe = window.electronAPI.onWorkspaceScanState((nextState) => {
+      setScanState(nextState)
+
+      if (nextState.status === 'ready') {
+        void loadWorkspaces()
+      }
+    })
+
+    return unsubscribe
+  }, [loadWorkspaces])
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.hash === activeWorkspaceHash),
@@ -124,72 +221,97 @@ export function useWorkspaceManager() {
     [activeWorkspaceHash, workspaces]
   )
 
-  const activeTranscripts = useMemo(
-    () => (activeWorkspaceHash ? transcriptsByWorkspace[activeWorkspaceHash] ?? [] : []),
-    [activeWorkspaceHash, transcriptsByWorkspace]
+  const activeTranscriptSummaries = useMemo(
+    () => (activeWorkspaceHash ? transcriptSummariesByWorkspace[activeWorkspaceHash] ?? [] : []),
+    [activeWorkspaceHash, transcriptSummariesByWorkspace]
   )
 
-  const selectedTranscript = useMemo(() => {
-    if (activeTranscripts.length === 0) return null
+  const selectedTranscriptSummary = useMemo(() => {
+    if (activeTranscriptSummaries.length === 0) return null
 
     if (selectedTranscriptId) {
-      return activeTranscripts.find((transcript) => transcript.id === selectedTranscriptId) ?? activeTranscripts[0]
+      return (
+        activeTranscriptSummaries.find((transcript) => transcript.id === selectedTranscriptId) ??
+        activeTranscriptSummaries[0]
+      )
     }
 
-    return activeTranscripts[0]
-  }, [activeTranscripts, selectedTranscriptId])
+    return activeTranscriptSummaries[0]
+  }, [activeTranscriptSummaries, selectedTranscriptId])
 
-  const loadWorkspaceTranscripts = useCallback(async (workspace: Workspace) => {
-    setTranscriptLoading(true)
-    setTranscriptError(null)
-
-    try {
-      const transcripts = await window.electronAPI.getWorkspaceTranscripts({
-        dbPath: workspace.dbPath,
-        projectPath: workspace.projectPath,
-      })
-      setTranscriptsByWorkspace((current) => ({ ...current, [workspace.hash]: transcripts }))
-      setSelectedTranscriptId((currentId) => {
-        if (currentId && transcripts.some((transcript) => transcript.id === currentId)) {
-          return currentId
-        }
-
-        return transcripts[0]?.id ?? null
-      })
-    } catch (error) {
-      setTranscriptError(error instanceof Error ? error.message : 'Unknown transcript error')
-      setTranscriptsByWorkspace((current) => ({ ...current, [workspace.hash]: [] }))
-      setSelectedTranscriptId(null)
-    } finally {
-      setTranscriptLoading(false)
-    }
-  }, [])
+  const selectedTranscript = useMemo(
+    () => (selectedTranscriptSummary ? transcriptDetailsById[selectedTranscriptSummary.id] ?? null : null),
+    [selectedTranscriptSummary, transcriptDetailsById]
+  )
 
   useEffect(() => {
-    if (!activeWorkspace) return
-    if (transcriptsByWorkspace[activeWorkspace.hash]) return
+    if (!activeWorkspaceHash) return
+    if (transcriptSummariesByWorkspace[activeWorkspaceHash]) return
 
-    void loadWorkspaceTranscripts(activeWorkspace)
-  }, [activeWorkspace, loadWorkspaceTranscripts, transcriptsByWorkspace])
+    void loadWorkspaceTranscripts(activeWorkspaceHash)
+  }, [activeWorkspaceHash, loadWorkspaceTranscripts, transcriptSummariesByWorkspace])
 
-  const handleSelectWorkspace = useCallback(
-    (hash: string) => {
-      setActiveWorkspaceHash(hash)
-      setSelectedTranscriptId(null)
+  useEffect(() => {
+    if (!activeWorkspaceHash || !selectedTranscriptSummary) return
+    if (transcriptDetailsById[selectedTranscriptSummary.id]) return
+
+    void loadTranscriptDetail(activeWorkspaceHash, selectedTranscriptSummary.id)
+  }, [activeWorkspaceHash, loadTranscriptDetail, selectedTranscriptSummary, transcriptDetailsById])
+
+  const handleTransfer = useCallback(
+    async (targetHash: string) => {
+      if (!sourceHash || !sourceComposerId) {
+        setStatus('Select a source chat before transferring.')
+        return
+      }
+
+      const sourceWorkspaceName =
+        getProjectName(workspaces.find((workspace) => workspace.hash === sourceHash)?.projectPath ?? '') ||
+        sourceHash
+      const targetWorkspaceName =
+        getProjectName(workspaces.find((workspace) => workspace.hash === targetHash)?.projectPath ?? '') ||
+        targetHash
+
+      const confirmed = confirm(
+        `Copy "${sourceComposerTitle ?? 'selected chat'}" from ${sourceWorkspaceName} into ${targetWorkspaceName}?`
+      )
+
+      if (!confirmed) return
+
+      const result: TransferResult = await window.electronAPI.transferTranscript({
+        sourceHash,
+        targetHash,
+        composerId: sourceComposerId,
+      })
+
+      setStatus(result.success ? result.message ?? '' : `Transfer failed: ${result.error}`)
+
+      if (!result.success) return
+
+      setTranscriptSummariesByWorkspace((current) => {
+        const next = { ...current }
+        delete next[targetHash]
+        return next
+      })
+
+      await refreshWorkspaces()
+      await loadWorkspaceTranscripts(targetHash, { force: true })
     },
-    []
+    [loadWorkspaceTranscripts, refreshWorkspaces, sourceComposerId, sourceComposerTitle, sourceHash, workspaces]
   )
 
-  const handleSelectTranscript = useCallback(
-    (workspaceHash: string, transcriptId: string) => {
-      setActiveWorkspaceHash(workspaceHash)
-      setSelectedTranscriptId(transcriptId)
-    },
-    []
-  )
+  const handleSelectWorkspace = useCallback((hash: string) => {
+    setActiveWorkspaceHash(hash)
+    setSelectedTranscriptId(null)
+  }, [])
+
+  const handleSelectTranscript = useCallback((workspaceHash: string, transcriptId: string) => {
+    setActiveWorkspaceHash(workspaceHash)
+    setSelectedTranscriptId(transcriptId)
+  }, [])
 
   const handleSetSourceSelection = useCallback(
-    (workspaceHash: string, transcript: WorkspaceTranscript | null) => {
+    (workspaceHash: string, transcript: TranscriptSummary | null) => {
       if (!transcript) {
         setStatus('Open a chat first, then mark it as the source.')
         return
@@ -204,13 +326,22 @@ export function useWorkspaceManager() {
   )
 
   const refreshActiveWorkspace = useCallback(async () => {
-    if (!activeWorkspace) {
-      await loadWorkspaces()
-      return
-    }
+    await refreshWorkspaces()
 
-    await Promise.all([loadWorkspaces(), loadWorkspaceTranscripts(activeWorkspace)])
-  }, [activeWorkspace, loadWorkspaceTranscripts, loadWorkspaces])
+    if (activeWorkspaceHash) {
+      await loadWorkspaceTranscripts(activeWorkspaceHash, { force: true })
+
+      const currentTranscriptId = selectedTranscriptId
+      if (currentTranscriptId) {
+        setTranscriptDetailsById((current) => {
+          const next = { ...current }
+          delete next[currentTranscriptId]
+          return next
+        })
+        await loadTranscriptDetail(activeWorkspaceHash, currentTranscriptId)
+      }
+    }
+  }, [activeWorkspaceHash, loadTranscriptDetail, loadWorkspaceTranscripts, refreshWorkspaces, selectedTranscriptId])
 
   const loadMoreWorkspaces = useCallback(() => {
     setVisibleWorkspaceCount((count) => count + WORKSPACE_PAGE_SIZE)
@@ -221,31 +352,39 @@ export function useWorkspaceManager() {
   }, [normalizedSearch])
 
   return {
-    activeTranscripts,
+    activeTranscriptSummaries,
     activeWorkspace,
     activeWorkspaceHash,
     filteredWorkspaces,
     hasMoreWorkspaces,
-    handleTransfer,
+    handleSetSourceSelection,
     handleSelectTranscript,
     handleSelectWorkspace,
-    loadWorkspaces,
+    handleTransfer,
     loadMoreWorkspaces,
+    loadTranscriptDetail,
+    loadWorkspaceTranscripts,
+    loadWorkspaces,
     refreshActiveWorkspace,
+    refreshWorkspaces,
+    scanState,
     searchIsStale: searchQuery !== deferredSearchQuery,
     searchQuery,
-    selectedWorkspace,
     selectedTranscript,
+    selectedTranscriptSummary,
+    selectedWorkspace,
     setSearchQuery,
-    handleSetSourceSelection,
-    sourceHash,
     sourceComposerId,
     sourceComposerTitle,
+    sourceHash,
     status,
     totalChats,
+    transcriptDetailLoading: Boolean(
+      selectedTranscriptSummary && transcriptDetailLoadingId === selectedTranscriptSummary.id
+    ),
     transcriptError,
-    transcriptLoading,
-    transcriptsByWorkspace,
+    transcriptListLoading: Boolean(activeWorkspaceHash && transcriptListLoadingByWorkspace[activeWorkspaceHash]),
+    transcriptSummariesByWorkspace,
     visibleWorkspaces,
     workspaces,
   }

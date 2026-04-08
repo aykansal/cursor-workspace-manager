@@ -1,4 +1,4 @@
-import type { Workspace } from '../../../../electron/preload'
+import type { WorkspaceSummary } from '../../../../electron/preload'
 
 export const PAGE_SIZE = 50
 
@@ -6,7 +6,7 @@ export function getProjectName(projectPath: string): string {
   return projectPath.split(/[/\\]/).pop() ?? ''
 }
 
-export function workspaceMatchesQuery(workspace: Workspace, query: string): boolean {
+export function workspaceMatchesQuery(workspace: WorkspaceSummary, query: string): boolean {
   if (!query) return true
 
   const searchable = [
@@ -14,7 +14,6 @@ export function workspaceMatchesQuery(workspace: Workspace, query: string): bool
     workspace.projectPath,
     getProjectName(workspace.projectPath),
     String(workspace.chatCount),
-    workspace.chatPreviews.join(' '),
   ]
     .join(' ')
     .toLowerCase()

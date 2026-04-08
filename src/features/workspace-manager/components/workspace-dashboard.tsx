@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Workspace, WorkspaceTranscript } from '../../../../electron/preload'
+import type {
+  TranscriptDetail,
+  TranscriptSummary,
+  WorkspaceScanState,
+  WorkspaceSummary,
+} from '../../../../electron/preload'
 import { Button } from '@/components/ui/button'
 import {
   Combobox,
@@ -19,19 +24,22 @@ import { TransferStatusAlert } from './transfer-status-alert'
 import { getProjectName } from '../lib/workspace-utils'
 
 type WorkspaceDashboardProps = {
-  activeWorkspace: Workspace | undefined
+  activeWorkspace: WorkspaceSummary | undefined
   sourceHash: string | null
   sourceComposerId: string | null
   sourceComposerTitle: string | null
-  sourceWorkspace: Workspace | undefined
-  workspaces: Workspace[]
+  sourceWorkspace: WorkspaceSummary | undefined
+  workspaces: WorkspaceSummary[]
   status: string
+  scanState: WorkspaceScanState
   transcriptError: string | null
-  transcriptLoading: boolean
+  transcriptDetailLoading: boolean
+  transcriptListLoading: boolean
   transcriptCount: number
-  selectedTranscript: WorkspaceTranscript | null
+  selectedTranscript: TranscriptDetail | null
+  selectedTranscriptSummary: TranscriptSummary | null
   onRefreshTranscripts: () => Promise<void> | void
-  onSelectSource: (hash: string, transcript: WorkspaceTranscript | null) => void
+  onSelectSource: (hash: string, transcript: TranscriptSummary | null) => void
   onTransfer: (targetHash: string) => void
 }
 
@@ -167,10 +175,13 @@ export function WorkspaceDashboard({
   sourceWorkspace,
   workspaces,
   status,
+  scanState,
   transcriptError,
-  transcriptLoading,
+  transcriptDetailLoading,
+  transcriptListLoading,
   transcriptCount,
   selectedTranscript,
+  selectedTranscriptSummary,
   onRefreshTranscripts,
   onSelectSource,
   onTransfer,
@@ -182,8 +193,9 @@ export function WorkspaceDashboard({
   const sourceProjectName = sourceWorkspace ? getProjectName(sourceWorkspace.projectPath) : null
   const isActiveSource =
     Boolean(activeWorkspace && sourceHash === activeWorkspace.hash) &&
-    selectedTranscript?.sourceKey === sourceComposerId
+    (selectedTranscript?.sourceKey ?? selectedTranscriptSummary?.sourceKey) === sourceComposerId
   const hasSourceChat = Boolean(sourceHash && sourceComposerId)
+  const selectedTranscriptUpdatedAt = selectedTranscript?.updatedAt ?? selectedTranscriptSummary?.updatedAt ?? null
 
   const messages = useMemo(() => {
     if (!selectedTranscript) return []
@@ -249,7 +261,7 @@ export function WorkspaceDashboard({
             />
           </div>
           <Button variant="ghost" size="icon-sm" onClick={onRefreshTranscripts} disabled={!activeWorkspace}>
-            <RefreshCwIcon />
+            <RefreshCwIcon className={cn(scanState.status === 'scanning' && 'animate-spin')} />
           </Button>
           <Button variant="ghost" size="icon-sm" disabled>
             <DownloadIcon />
@@ -263,14 +275,20 @@ export function WorkspaceDashboard({
         </div>
       ) : null}
 
+      {scanState.status === 'error' && scanState.message ? (
+        <div className="border-b border-white/8 px-4 py-3 text-sm text-amber-100 md:px-5">
+          Background indexing issue: {scanState.message}
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-4 py-3 md:px-5">
         <div className="min-w-0">
           <div className="truncate text-sm text-foreground">
-            {selectedTranscript?.title ?? 'No chat selected'}
+            {selectedTranscript?.title ?? selectedTranscriptSummary?.title ?? 'No chat selected'}
           </div>
           <div className="truncate text-xs text-muted-foreground">
-            {selectedTranscript?.updatedAt
-              ? `${formatTime(selectedTranscript.updatedAt)} · ${transcriptCount} chats`
+            {selectedTranscriptUpdatedAt
+              ? `${formatTime(selectedTranscriptUpdatedAt)} · ${transcriptCount} chats`
               : activeWorkspace
                 ? `${transcriptCount} chats`
                 : 'Open a workspace to inspect its chats'}
@@ -281,8 +299,8 @@ export function WorkspaceDashboard({
           <Button
             variant={isActiveSource ? 'secondary' : 'outline'}
             size="sm"
-            disabled={!activeWorkspace || !selectedTranscript}
-            onClick={() => activeWorkspace && onSelectSource(activeWorkspace.hash, selectedTranscript)}
+            disabled={!activeWorkspace || !selectedTranscriptSummary}
+            onClick={() => activeWorkspace && onSelectSource(activeWorkspace.hash, selectedTranscriptSummary)}
           >
             {isActiveSource ? 'Source selected' : 'Use this chat as source'}
           </Button>
@@ -350,7 +368,7 @@ export function WorkspaceDashboard({
           </div>
         ) : null}
 
-        {activeWorkspace && transcriptLoading ? (
+        {activeWorkspace && transcriptListLoading ? (
           <div className="mx-auto flex max-w-4xl flex-col gap-5">
             <Skeleton className="h-20 rounded-2xl bg-white/6" />
             <Skeleton className="h-28 rounded-2xl bg-white/6" />
@@ -358,13 +376,13 @@ export function WorkspaceDashboard({
           </div>
         ) : null}
 
-        {!transcriptLoading && transcriptError ? (
+        {!transcriptListLoading && !transcriptDetailLoading && transcriptError ? (
           <div className="mx-auto max-w-3xl rounded-2xl border border-white/10 bg-white/4 px-4 py-3 text-sm text-red-200">
             Unable to read transcript: {transcriptError}
           </div>
         ) : null}
 
-        {!transcriptLoading && !transcriptError && !selectedTranscript && activeWorkspace ? (
+        {!transcriptListLoading && !transcriptError && !selectedTranscriptSummary && activeWorkspace ? (
           <div className="flex h-full items-center justify-center">
             <div className="max-w-sm text-center">
               <div className="text-base font-medium text-foreground">No chat selected</div>
@@ -375,7 +393,15 @@ export function WorkspaceDashboard({
           </div>
         ) : null}
 
-        {!transcriptLoading && !transcriptError && selectedTranscript ? (
+        {!transcriptListLoading && !transcriptError && selectedTranscriptSummary && transcriptDetailLoading ? (
+          <div className="mx-auto flex max-w-4xl flex-col gap-5">
+            <Skeleton className="h-20 rounded-2xl bg-white/6" />
+            <Skeleton className="h-28 rounded-2xl bg-white/6" />
+            <Skeleton className="h-24 rounded-2xl bg-white/6" />
+          </div>
+        ) : null}
+
+        {!transcriptListLoading && !transcriptError && selectedTranscript ? (
           <div className="mx-auto max-w-4xl">
             {messages.length === 0 && transcriptSearch ? (
               <div className="rounded-2xl border border-white/8 bg-white/4 px-4 py-3 text-sm text-muted-foreground">
