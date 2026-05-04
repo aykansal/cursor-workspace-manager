@@ -1,3 +1,5 @@
+import fs from 'fs'
+import path from 'path'
 import type {
   ServiceMessage,
   ServiceRequest,
@@ -14,6 +16,23 @@ import { applyIndexState, scanWorkspace, scanWorkspaceStorage } from './services
 import { getTranscriptDetail as loadTranscriptDetail } from './services/transcript-store'
 import { transferTranscript } from './services/workspace-transfer'
 
+const serviceLogPath = process.env.CURSOR_WORKSPACE_MANAGER_SERVICE_LOG
+
+function writeServiceLog(message: string, details?: Record<string, unknown>) {
+  const line = `[${new Date().toISOString()}] ${message}${details ? ` ${JSON.stringify(details)}` : ''}\n`
+
+  if (serviceLogPath) {
+    try {
+      fs.mkdirSync(path.dirname(serviceLogPath), { recursive: true })
+      fs.appendFileSync(serviceLogPath, line, 'utf8')
+    } catch {
+      // best-effort logging only
+    }
+  }
+
+  process.stdout.write(line)
+}
+
 class WorkspaceServiceProcess {
   private readonly cacheStore = new CacheStore()
   private snapshot: WorkspaceIndexSnapshot = {
@@ -29,6 +48,14 @@ class WorkspaceServiceProcess {
   }
 
   constructor() {
+    writeServiceLog('workspace-service startup', {
+      pid: process.pid,
+      ppid: process.ppid,
+      execPath: process.execPath,
+      cwd: process.cwd(),
+      argv: process.argv,
+    })
+
     this.snapshot = this.cacheStore.read()
     this.publishScanState()
     queueMicrotask(() => {
@@ -42,6 +69,11 @@ class WorkspaceServiceProcess {
   }
 
   private async handleRequest<K extends keyof ServiceResponseMap>(request: ServiceRequest<K>) {
+    writeServiceLog('workspace-service request', {
+      method: request.method,
+      id: request.id,
+    })
+
     try {
       const result = await this.dispatch(request)
       this.send({
@@ -51,6 +83,11 @@ class WorkspaceServiceProcess {
         result,
       })
     } catch (error) {
+      writeServiceLog('workspace-service request failed', {
+        method: request.method,
+        id: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
       this.send({
         kind: 'response',
         id: request.id,
@@ -139,6 +176,8 @@ class WorkspaceServiceProcess {
   private async startScan(message: string) {
     if (this.scanPromise) return this.scanPromise
 
+    writeServiceLog('workspace-service scan started', { message })
+
     this.scanState = {
       status: 'scanning',
       startedAt: new Date().toISOString(),
@@ -152,6 +191,9 @@ class WorkspaceServiceProcess {
       .then((snapshot) => {
         this.snapshot = applyIndexState(snapshot, 'fresh')
         this.persistSnapshot()
+        writeServiceLog('workspace-service scan completed', {
+          workspaceCount: this.snapshot.workspaces.length,
+        })
         this.scanState = {
           status: 'ready',
           startedAt: this.scanState.startedAt,
@@ -161,6 +203,10 @@ class WorkspaceServiceProcess {
         this.publishScanState()
       })
       .catch((error) => {
+        writeServiceLog('workspace-service scan failed', {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        })
         this.snapshot = applyIndexState(this.snapshot, 'stale')
         this.scanState = {
           status: 'error',
@@ -204,4 +250,28 @@ const service = new WorkspaceServiceProcess()
 
 process.on('message', (message: ServiceMessage) => {
   service.handleMessage(message)
+})
+
+process.on('uncaughtException', (error) => {
+  writeServiceLog('workspace-service uncaughtException', {
+    error: error.message,
+    stack: error.stack,
+  })
+  process.exit(1)
+})
+
+process.on('unhandledRejection', (reason) => {
+  writeServiceLog('workspace-service unhandledRejection', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  })
+  process.exit(1)
+})
+
+process.on('beforeExit', (code) => {
+  writeServiceLog('workspace-service beforeExit', { code })
+})
+
+process.on('exit', (code) => {
+  writeServiceLog('workspace-service exit', { code })
 })

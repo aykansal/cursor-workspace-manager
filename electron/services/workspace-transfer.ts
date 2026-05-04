@@ -4,14 +4,13 @@ import path from 'path'
 import type DatabaseType from 'better-sqlite3'
 import type { TransferPayload, TransferResult } from '../contracts'
 import { logger } from '../logger'
-import { getTranscriptFilePath, getWorkspaceDbPath, getWorkspaceProjectPath, resolveTranscriptFilePath } from './cursor-paths'
+import {
+  getTranscriptFilePath,
+  getWorkspaceDbPath,
+  getWorkspaceProjectPath,
+  resolveTranscriptFilePath,
+} from './cursor-paths'
 import { Database } from './sqlite'
-import { readComposerData, writeComposerData } from './workspace-index'
-
-type ComposerData = {
-  allComposers?: Array<Record<string, unknown>>
-  [key: string]: unknown
-}
 
 function getBackupDir(): string {
   return path.join(os.homedir(), 'Desktop', 'Cursor-Backups')
@@ -34,6 +33,47 @@ function closeQuietly(db: DatabaseType.Database | null) {
   } catch {
     // ignore close errors during cleanup
   }
+}
+
+function collectComposerIds(db: DatabaseType.Database): string[] {
+  const rows = db
+    .prepare("SELECT value FROM ItemTable WHERE key LIKE 'workbench.panel.composerChatViewPane.%'")
+    .all() as Array<{ value?: string }>
+
+  const ids = new Set<string>()
+
+  for (const row of rows) {
+    if (!row.value) continue
+
+    try {
+      const parsed = JSON.parse(row.value) as Record<string, unknown>
+      for (const key of Object.keys(parsed)) {
+        const prefix = 'workbench.panel.aichat.view.'
+        if (key.startsWith(prefix)) {
+          ids.add(key.slice(prefix.length))
+        }
+      }
+    } catch {
+      // ignore malformed pane state
+    }
+  }
+
+  return [...ids]
+}
+
+function upsertComposerPaneState(db: DatabaseType.Database, composerId: string) {
+  const paneState = {
+    [`workbench.panel.aichat.view.${composerId}`]: {
+      collapsed: false,
+      isHidden: false,
+      size: 940,
+    },
+  }
+
+  db.prepare('INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)').run(
+    `workbench.panel.composerChatViewPane.${composerId}`,
+    JSON.stringify(paneState)
+  )
 }
 
 export function transferTranscript(payload: TransferPayload): TransferResult {
@@ -72,27 +112,16 @@ export function transferTranscript(payload: TransferPayload): TransferResult {
     sourceDb = new Database(sourceDbPath)
     targetDb = new Database(targetDbPath)
 
-    const sourceComposerData = readComposerData(sourceDb) as ComposerData
-    const targetComposerData = readComposerData(targetDb) as ComposerData
-
-    const sourceComposer = (sourceComposerData.allComposers ?? []).find((composer) => {
-      if (!composer || typeof composer !== 'object') return false
-      return (composer as Record<string, unknown>).composerId === payload.composerId
-    })
-
-    if (!sourceComposer) {
+    const sourceComposerIds = collectComposerIds(sourceDb)
+    if (!sourceComposerIds.includes(payload.composerId)) {
       return {
         success: false,
-        error: `Selected chat ${payload.composerId} was not found in the source workspace.`,
+        error: `Selected chat ${payload.composerId} was not found in the source workspace pane state.`,
       }
     }
 
-    const targetHasComposer = (targetComposerData.allComposers ?? []).some((composer) => {
-      if (!composer || typeof composer !== 'object') return false
-      return (composer as Record<string, unknown>).composerId === payload.composerId
-    })
-
-    if (targetHasComposer) {
+    const targetComposerIds = collectComposerIds(targetDb)
+    if (targetComposerIds.includes(payload.composerId)) {
       return {
         success: true,
         message: 'Chat already exists in the target workspace. Skipped.',
@@ -100,6 +129,7 @@ export function transferTranscript(payload: TransferPayload): TransferResult {
     }
 
     const sourceTranscriptFile = resolveTranscriptFilePath(sourceProjectPath, payload.composerId)
+
     const sourceTranscriptDir = path.dirname(sourceTranscriptFile)
     if (!fs.existsSync(sourceTranscriptFile)) {
       return {
@@ -123,12 +153,7 @@ export function transferTranscript(payload: TransferPayload): TransferResult {
 
     try {
       const transaction = targetDb.transaction(() => {
-        const nextComposerData: ComposerData = {
-          ...targetComposerData,
-          allComposers: [...(targetComposerData.allComposers ?? []), sourceComposer as Record<string, unknown>],
-        }
-
-        writeComposerData(targetDb!, nextComposerData)
+        upsertComposerPaneState(targetDb!, payload.composerId)
       })
 
       transaction()

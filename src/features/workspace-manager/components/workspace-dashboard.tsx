@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
   TranscriptDetail,
   TranscriptSummary,
@@ -15,11 +15,28 @@ import {
   ComboboxTrigger,
   ComboboxValue,
 } from '@/components/ui/combobox'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { SidebarInset, SidebarTrigger } from '@/components/ui/sidebar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { CheckIcon, DownloadIcon, FolderSearch2Icon, MoveRightIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
+import {
+  BotIcon,
+  CheckIcon,
+  DownloadIcon,
+  EyeOffIcon,
+  FolderSearch2Icon,
+  MoveRightIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  UserIcon,
+  WrenchIcon,
+} from 'lucide-react'
+import {
+  parseTranscriptMessages,
+  type TranscriptAttachment,
+  type TranscriptRenderBlock,
+} from '../lib/transcript-parser'
 import { TransferStatusAlert } from './transfer-status-alert'
 import { getProjectName } from '../lib/workspace-utils'
 
@@ -43,117 +60,297 @@ type WorkspaceDashboardProps = {
   onTransfer: (targetHash: string) => void
 }
 
-type TranscriptBlock =
-  | { type: 'text'; content: string }
-  | { type: 'code'; content: string; language: string }
+function renderInlineText(content: string): ReactNode[] {
+  const pattern = /(\[[^\]]+\]\([^\)]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g
+  const nodes: ReactNode[] = []
+  let lastIndex = 0
 
-type TranscriptMessage = {
-  id: string
-  role: 'user' | 'assistant'
-  body: string
-  blocks: TranscriptBlock[]
-}
+  for (const match of content.matchAll(pattern)) {
+    const matchIndex = match.index ?? 0
 
-function parseTranscriptBlocks(content: string): TranscriptBlock[] {
-  const parts = content.split(/```/)
-  const blocks: TranscriptBlock[] = []
-
-  parts.forEach((part, index) => {
-    if (index % 2 === 1) {
-      const [languageLine, ...codeLines] = part.split('\n')
-      blocks.push({
-        type: 'code',
-        language: languageLine.trim(),
-        content: codeLines.join('\n').trim(),
-      })
-      return
+    if (matchIndex > lastIndex) {
+      nodes.push(content.slice(lastIndex, matchIndex))
     }
 
-    const textBlocks = part
-      .split(/\n\s*\n/)
-      .map((chunk) => chunk.trim())
-      .filter(Boolean)
-      .map((chunk) => ({ type: 'text' as const, content: chunk }))
-    blocks.push(...textBlocks)
-  })
+    const token = match[0]
 
-  return blocks
-}
-
-function normalizeMessageText(content: string) {
-  return content
-    .replace(/<user_query>\s*/gi, '')
-    .replace(/\s*<\/user_query>/gi, '')
-    .replace(/\[REDACTED\]/gi, '')
-    .trim()
-}
-
-function parseTranscriptMessages(content: string): TranscriptMessage[] {
-  const lines = content.split('\n')
-  const messages: Array<{ role: 'user' | 'assistant'; bodyLines: string[] }> = []
-  let current: { role: 'user' | 'assistant'; bodyLines: string[] } | null = null
-
-  const flush = () => {
-    if (!current) return
-
-    const body = normalizeMessageText(current.bodyLines.join('\n').trim())
-    if (body) {
-      const previousMessage = messages[messages.length - 1]
-
-      if (previousMessage && previousMessage.role === current.role) {
-        previousMessage.bodyLines.push(body)
+    if (token.startsWith('`')) {
+      nodes.push(
+        <code
+          key={`inline-code-${nodes.length}`}
+          className="rounded bg-white/8 px-1.5 py-0.5 font-mono text-[0.92em] text-foreground"
+        >
+          {token.slice(1, -1)}
+        </code>
+      )
+    } else if (token.startsWith('**')) {
+      nodes.push(
+        <strong key={`inline-strong-${nodes.length}`} className="font-semibold text-foreground">
+          {token.slice(2, -2)}
+        </strong>
+      )
+    } else if (token.startsWith('*')) {
+      nodes.push(
+        <em key={`inline-em-${nodes.length}`} className="italic text-foreground">
+          {token.slice(1, -1)}
+        </em>
+      )
+    } else {
+      const linkMatch = token.match(/^\[([^\]]+)\]\(([^\)]+)\)$/)
+      if (linkMatch) {
+        nodes.push(
+          <a
+            key={`inline-link-${nodes.length}`}
+            href={linkMatch[2]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-cyan-200 underline decoration-cyan-200/40 underline-offset-4 transition hover:text-cyan-100"
+          >
+            {linkMatch[1]}
+          </a>
+        )
       } else {
-        messages.push({
-          role: current.role,
-          bodyLines: [body],
-        })
+        nodes.push(token)
       }
     }
-    current = null
+
+    lastIndex = matchIndex + token.length
   }
 
-  for (const line of lines) {
-    if (line.startsWith('User: ')) {
-      flush()
-      current = {
-        role: 'user',
-        bodyLines: [line.replace(/^User:\s*/, '')],
-      }
-      continue
-    }
-
-    if (line.startsWith('Assistant: ')) {
-      flush()
-      current = {
-        role: 'assistant',
-        bodyLines: [line.replace(/^Assistant:\s*/, '')],
-      }
-      continue
-    }
-
-    if (!current) {
-      current = {
-        role: 'assistant',
-        bodyLines: [line],
-      }
-      continue
-    }
-
-    current.bodyLines.push(line)
+  if (lastIndex < content.length) {
+    nodes.push(content.slice(lastIndex))
   }
 
-  flush()
+  return nodes
+}
 
-  return messages.map((message, index) => {
-    const body = message.bodyLines.join('\n').trim()
+function renderTextBlock(content: string, keyPrefix: string): ReactNode {
+  const lines = content.split('\n')
+  const nodes: ReactNode[] = []
 
-    return {
-      id: `${message.role}-${index}`,
-      role: message.role,
-      body,
-      blocks: parseTranscriptBlocks(body),
+  let lineIndex = 0
+  while (lineIndex < lines.length) {
+    const line = lines[lineIndex].trimEnd()
+
+    if (!line.trim()) {
+      lineIndex += 1
+      continue
     }
-  })
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
+    if (headingMatch) {
+      const level = headingMatch[1].length
+      const headingClassName = cn(
+        'font-semibold text-foreground',
+        level <= 2 ? 'text-lg' : level === 3 ? 'text-base' : 'text-sm'
+      )
+
+      nodes.push(
+        <div
+          key={`${keyPrefix}-heading-${lineIndex}`}
+          className={headingClassName}
+        >
+          {renderInlineText(headingMatch[2])}
+        </div>
+      )
+      lineIndex += 1
+      continue
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines: string[] = []
+      while (lineIndex < lines.length && /^>\s?/.test(lines[lineIndex].trimStart())) {
+        quoteLines.push(lines[lineIndex].trimStart().replace(/^>\s?/, ''))
+        lineIndex += 1
+      }
+
+      nodes.push(
+        <blockquote
+          key={`${keyPrefix}-quote-${lineIndex}`}
+          className="border-l-2 border-white/12 pl-4 text-[14px] leading-7 text-muted-foreground"
+        >
+          {quoteLines.map((quoteLine, quoteIndex) => (
+            <p key={`${keyPrefix}-quote-${lineIndex}-${quoteIndex}`}>{renderInlineText(quoteLine)}</p>
+          ))}
+        </blockquote>
+      )
+      continue
+    }
+
+    const unorderedMatch = line.match(/^[-*+]\s+(.*)$/)
+    const orderedMatch = line.match(/^\d+\.\s+(.*)$/)
+    if (unorderedMatch || orderedMatch) {
+      const listItems: string[] = []
+      const ordered = Boolean(orderedMatch)
+
+      while (lineIndex < lines.length) {
+        const listLine = lines[lineIndex].trimEnd()
+        const itemMatch = ordered
+          ? listLine.match(/^\d+\.\s+(.*)$/)
+          : listLine.match(/^[-*+]\s+(.*)$/)
+
+        if (!itemMatch) break
+
+        listItems.push(itemMatch[1])
+        lineIndex += 1
+      }
+
+      const ListTag = ordered ? 'ol' : 'ul'
+
+      nodes.push(
+        <ListTag
+          key={`${keyPrefix}-list-${lineIndex}`}
+          className={cn('space-y-1.5 pl-5', ordered ? 'list-decimal' : 'list-disc')}
+        >
+          {listItems.map((item, itemIndex) => (
+            <li key={`${keyPrefix}-list-${lineIndex}-${itemIndex}`} className="pl-1 text-[14px] leading-7 text-foreground/90">
+              {renderInlineText(item)}
+            </li>
+          ))}
+        </ListTag>
+      )
+      continue
+    }
+
+    const paragraphLines = [line.trim()]
+    lineIndex += 1
+
+    while (lineIndex < lines.length) {
+      const nextLine = lines[lineIndex].trimEnd()
+      const nextTrimmed = nextLine.trim()
+
+      if (!nextTrimmed) {
+        lineIndex += 1
+        break
+      }
+
+      if (
+        nextLine.startsWith('#') ||
+        nextLine.startsWith('>') ||
+        /^[-*+]\s+/.test(nextLine) ||
+        /^\d+\.\s+/.test(nextLine)
+      ) {
+        break
+      }
+
+      paragraphLines.push(nextTrimmed)
+      lineIndex += 1
+    }
+
+    nodes.push(
+      <p key={`${keyPrefix}-paragraph-${lineIndex}`} className="text-[14px] leading-7 text-foreground/90">
+        {renderInlineText(paragraphLines.join(' '))}
+      </p>
+    )
+  }
+
+  return <div className="space-y-3">{nodes}</div>
+}
+
+function renderAttachmentList(items: TranscriptAttachment[], keyPrefix: string): ReactNode {
+  if (items.length === 0) return null
+
+  return (
+    <ul className="mt-3 space-y-1.5 border-t border-white/8 pt-3">
+      {items.map((item, i) => (
+        <li key={`${keyPrefix}-att-${i}`} className="font-mono text-[12.5px] leading-6 text-foreground/80">
+          {item.label}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function renderTranscriptBlock(block: TranscriptRenderBlock, key: string): ReactNode {
+  if (block.type === 'code') {
+    return (
+      <div key={key} className="overflow-hidden rounded-xl border border-white/10 bg-[#111111]">
+        <div className="border-b border-white/8 px-4 py-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
+          {block.language || 'code'}
+        </div>
+        <pre className="workspace-scroll overflow-auto px-4 py-4 font-mono text-[13px] leading-7 whitespace-pre-wrap text-foreground">
+          {block.content}
+        </pre>
+      </div>
+    )
+  }
+
+  if (block.type === 'tool') {
+    return (
+      <div key={key} className="overflow-hidden rounded-xl border border-cyan-500/20 bg-cyan-500/6">
+        <div className="flex items-center gap-2 border-b border-cyan-500/12 px-4 py-2.5">
+          <Badge variant="outline" className="border-cyan-400/25 bg-cyan-400/8 text-cyan-100">
+            <WrenchIcon data-icon="inline-start" />
+            Tool Call
+          </Badge>
+          <div className="text-sm font-medium text-cyan-50">{block.name}</div>
+        </div>
+        <pre className="workspace-scroll overflow-auto px-4 py-4 font-mono text-[12.5px] leading-6 whitespace-pre-wrap text-cyan-50/92">
+          {block.input}
+        </pre>
+      </div>
+    )
+  }
+
+  if (block.type === 'redacted') {
+    return (
+      <div key={key} className="rounded-xl border border-amber-400/15 bg-amber-400/8 px-4 py-3 text-sm text-amber-100">
+        <div className="flex items-center gap-2 font-medium">
+          <EyeOffIcon className="size-4" />
+          {block.label}
+        </div>
+      </div>
+    )
+  }
+
+  if (block.type === 'unknown') {
+    return (
+      <div key={key} className="overflow-hidden rounded-xl border border-white/10 bg-white/4">
+        <div className="border-b border-white/8 px-4 py-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
+          {block.label}
+        </div>
+        <pre className="workspace-scroll overflow-auto px-4 py-4 font-mono text-[12.5px] leading-6 whitespace-pre-wrap text-foreground/85">
+          {block.content}
+        </pre>
+      </div>
+    )
+  }
+
+  if (block.type === 'attachments') {
+    return (
+      <div key={key} className="overflow-hidden rounded-xl border border-white/10 bg-white/4">
+        <div className="border-b border-white/8 px-4 py-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
+          {block.label}
+        </div>
+        <div className="px-4 py-4">{renderAttachmentList(block.items, key)}</div>
+      </div>
+    )
+  }
+
+  if (block.type === 'section') {
+    return (
+      <div key={key} className="overflow-hidden rounded-xl border border-white/10 bg-white/4">
+        <div className="border-b border-white/8 px-4 py-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
+          {block.label}
+        </div>
+        <div className="px-4 py-4">
+          {renderTextBlock(block.content, `${key}-section`)}
+          {renderAttachmentList(block.attachments, `${key}-section`)}
+        </div>
+      </div>
+    )
+  }
+
+  if (block.type === 'text') {
+    return (
+      <Fragment key={key}>
+        {renderTextBlock(block.content, key)}
+      </Fragment>
+    )
+  }
+
+  const _exhaustive: never = block
+  return _exhaustive
 }
 
 function formatTime(value: string | null) {
@@ -205,10 +402,25 @@ export function WorkspaceDashboard({
 
     if (!query) return parsed
 
-    return parsed.filter((message) =>
-      message.blocks.some((block) => block.content.toLowerCase().includes(query))
-    )
+    return parsed.filter((message) => message.searchText.includes(query))
   }, [selectedTranscript, transcriptSearch])
+
+  const transcriptStats = useMemo(() => {
+    return messages.reduce(
+      (stats, message) => {
+        if (message.role === 'user') stats.user += 1
+        else stats.assistant += 1
+
+        for (const block of message.blocks) {
+          if (block.type === 'tool') stats.tools += 1
+          if (block.type === 'redacted') stats.redacted += 1
+        }
+
+        return stats
+      },
+      { user: 0, assistant: 0, tools: 0, redacted: 0 }
+    )
+  }, [messages])
 
   const targetWorkspaceOptions = useMemo(
     () =>
@@ -293,6 +505,24 @@ export function WorkspaceDashboard({
                 ? `${transcriptCount} chats`
                 : 'Open a workspace to inspect its chats'}
           </div>
+          {selectedTranscript ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline" className="border-white/10 bg-white/4 text-foreground/80">
+                {transcriptStats.user} user
+              </Badge>
+              <Badge variant="outline" className="border-white/10 bg-white/4 text-foreground/80">
+                {transcriptStats.assistant} assistant
+              </Badge>
+              <Badge variant="outline" className="border-cyan-500/20 bg-cyan-500/8 text-cyan-100">
+                {transcriptStats.tools} tool calls
+              </Badge>
+              {transcriptStats.redacted > 0 ? (
+                <Badge variant="outline" className="border-amber-400/20 bg-amber-400/8 text-amber-100">
+                  {transcriptStats.redacted} redacted
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -315,7 +545,7 @@ export function WorkspaceDashboard({
                 render={
                   <Button
                     variant="outline"
-                    className="min-w-[240px] justify-between"
+                    className="min-w-60 justify-between"
                   />
                 }
               >
@@ -412,8 +642,8 @@ export function WorkspaceDashboard({
             <div className="flex flex-col gap-2.5">
               {messages.map((message) => {
                 const isUser = message.role === 'user'
-                const label = isUser ? 'You' : 'Assistant'
-                const initial = isUser ? 'Y' : 'A'
+                const label = isUser ? 'User Query' : 'Assistant Step'
+                const AvatarIcon = isUser ? UserIcon : BotIcon
 
                 return (
                   <section
@@ -432,42 +662,19 @@ export function WorkspaceDashboard({
                           isUser ? 'bg-white/10 text-foreground' : 'bg-emerald-500/12 text-emerald-100'
                         )}
                       >
-                        {initial}
+                        <AvatarIcon className="size-3.5" />
                       </div>
                       <div className="min-w-0">
                         <div className="text-[13px] font-medium text-foreground">{label}</div>
-                        {selectedTranscript.updatedAt ? (
-                          <div className="text-xs text-muted-foreground">
-                            {formatTime(selectedTranscript.updatedAt)}
-                          </div>
-                        ) : null}
+                        <div className="text-xs text-muted-foreground">
+                          {message.blocks.length} block{message.blocks.length === 1 ? '' : 's'}
+                        </div>
                       </div>
                     </div>
                     <div className="flex flex-col gap-3">
-                      {message.blocks.map((block, blockIndex) => {
-                        if (block.type === 'code') {
-                          return (
-                            <div key={`${message.id}-code-${blockIndex}`} className="overflow-hidden rounded-xl border border-white/10 bg-[#111111]">
-                              <div className="border-b border-white/8 px-4 py-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                                {block.language || 'code'}
-                              </div>
-                              <pre className="workspace-scroll overflow-auto px-4 py-4 font-mono text-[13px] leading-7 whitespace-pre-wrap text-foreground">
-                                {block.content}
-                              </pre>
-                            </div>
-                          )
-                        }
-
-                        return (
-                          <div key={`${message.id}-text-${blockIndex}`} className="text-[14px] leading-7 text-foreground/90">
-                            {block.content.split('\n').map((line, lineIndex) => (
-                              <p key={`${message.id}-${blockIndex}-${lineIndex}`} className={lineIndex === 0 ? '' : 'mt-3'}>
-                                {line}
-                              </p>
-                            ))}
-                          </div>
-                        )
-                      })}
+                      {message.blocks.map((block, blockIndex) =>
+                        renderTranscriptBlock(block, `${message.id}-${blockIndex}`)
+                      )}
                     </div>
                   </section>
                 )

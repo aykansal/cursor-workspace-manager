@@ -74,18 +74,32 @@ export function useWorkspaceManager() {
 
   const loadWorkspaces = useCallback(async () => {
     const requestId = ++workspaceLoadRequestId.current
-    const nextWorkspaces = await window.electronAPI.listWorkspaces()
 
-    if (requestId !== workspaceLoadRequestId.current) return
-    applyWorkspaces(nextWorkspaces)
+    try {
+      const nextWorkspaces = await window.electronAPI.listWorkspaces()
+
+      if (requestId !== workspaceLoadRequestId.current) return
+      applyWorkspaces(nextWorkspaces)
+      setStatus('')
+    } catch (error) {
+      if (requestId !== workspaceLoadRequestId.current) return
+      setStatus(error instanceof Error ? error.message : 'Failed to load workspaces.')
+    }
   }, [applyWorkspaces])
 
   const refreshWorkspaces = useCallback(async () => {
     const requestId = ++workspaceLoadRequestId.current
-    const nextWorkspaces = await window.electronAPI.refreshWorkspaces()
 
-    if (requestId !== workspaceLoadRequestId.current) return
-    applyWorkspaces(nextWorkspaces)
+    try {
+      const nextWorkspaces = await window.electronAPI.refreshWorkspaces()
+
+      if (requestId !== workspaceLoadRequestId.current) return
+      applyWorkspaces(nextWorkspaces)
+      setStatus('')
+    } catch (error) {
+      if (requestId !== workspaceLoadRequestId.current) return
+      setStatus(error instanceof Error ? error.message : 'Failed to refresh workspaces.')
+    }
   }, [applyWorkspaces])
 
   const loadWorkspaceTranscripts = useCallback(
@@ -174,7 +188,15 @@ export function useWorkspaceManager() {
 
   useEffect(() => {
     void loadWorkspaces()
-    void window.electronAPI.getWorkspaceScanState().then(setScanState)
+    void window.electronAPI.getWorkspaceScanState().then((nextState) => {
+      setScanState(nextState)
+
+      // If the initial "ready" event happened before the listener was attached,
+      // reload from the now-populated service snapshot so the UI does not stay empty.
+      if (nextState.status === 'ready') {
+        void loadWorkspaces()
+      }
+    })
 
     const unsubscribe = window.electronAPI.onWorkspaceScanState((nextState) => {
       setScanState(nextState)

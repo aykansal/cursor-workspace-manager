@@ -2,10 +2,10 @@ import { EventEmitter } from 'events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ServiceMessage } from './contracts'
 
-const forkMock = vi.fn()
+const spawnMock = vi.fn()
 
 vi.mock('child_process', () => ({
-  fork: forkMock,
+  spawn: spawnMock,
 }))
 
 class FakeChild extends EventEmitter {
@@ -26,12 +26,12 @@ class FakeChild extends EventEmitter {
 
 describe('service-client', () => {
   beforeEach(() => {
-    forkMock.mockReset()
+    spawnMock.mockReset()
   })
 
   it('correlates request and response ids', async () => {
     const child = new FakeChild()
-    forkMock.mockReturnValue(child)
+    spawnMock.mockReturnValue(child)
 
     const { WorkspaceServiceClient } = await import('./service-client')
     const client = new WorkspaceServiceClient()
@@ -55,7 +55,7 @@ describe('service-client', () => {
     vi.useFakeTimers()
 
     const child = new FakeChild()
-    forkMock.mockReturnValue(child)
+    spawnMock.mockReturnValue(child)
 
     const { WorkspaceServiceClient } = await import('./service-client')
     const client = new WorkspaceServiceClient()

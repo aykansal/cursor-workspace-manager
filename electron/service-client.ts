@@ -1,7 +1,8 @@
-import { ChildProcess, fork } from 'child_process'
+import { ChildProcess, spawn } from 'child_process'
 import { EventEmitter } from 'events'
 import path from 'path'
 import { randomUUID } from 'crypto'
+import { app } from 'electron'
 import type { ServiceEvent, ServiceMessage, ServiceRequestMap, ServiceResponseMap, WorkspaceScanState } from './contracts'
 import { logger } from './logger'
 
@@ -73,21 +74,85 @@ export class WorkspaceServiceClient extends EventEmitter<WorkspaceServiceClientE
   }
 
   private spawn() {
-    const servicePath = path.join(__dirname, 'service-process.js')
-    const child = fork(servicePath, [], {
-      stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-      env: process.env,
+    const servicePath = this.getServiceProcessPath()
+    const childEnv = {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      CURSOR_WORKSPACE_MANAGER_SERVICE_LOG: this.getServiceLogPath(),
+      NODE_PATH: this.getServiceNodePath(),
+    }
+
+    logger.info('Starting workspace service process:', {
+      execPath: process.execPath,
+      servicePath,
+      isPackaged: app?.isPackaged ?? false,
+      logPath: childEnv.CURSOR_WORKSPACE_MANAGER_SERVICE_LOG,
+      nodePath: childEnv.NODE_PATH,
+    })
+
+    const child = spawn(process.execPath, [servicePath], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      env: childEnv,
+      windowsHide: true,
     })
 
     this.child = child
+
+    child.stdout?.on('data', (chunk) => {
+      logger.info(`[workspace-service stdout] ${String(chunk).trimEnd()}`)
+    })
+
+    child.stderr?.on('data', (chunk) => {
+      logger.error(`[workspace-service stderr] ${String(chunk).trimEnd()}`)
+    })
 
     child.on('message', (message: ServiceMessage) => {
       this.handleMessage(message)
     })
 
+    child.once('error', (error) => {
+      logger.error('Workspace service process failed to spawn:', {
+        error: error.message,
+        servicePath,
+      })
+    })
+
     child.once('exit', (code, signal) => {
       this.handleExit(code, signal)
     })
+  }
+
+  private getServiceProcessPath(): string {
+    const bundledPath = path.join(__dirname, 'service-process.js')
+    if (!app || !app.isPackaged) {
+      return bundledPath
+    }
+
+    return bundledPath.replace('app.asar', 'app.asar.unpacked')
+  }
+
+  private getServiceLogPath(): string {
+    const userDataPath = app?.getPath('userData')
+    if (!userDataPath) {
+      return path.join(process.cwd(), 'workspace-service.log')
+    }
+
+    return path.join(userDataPath, 'logs', 'workspace-service.log')
+  }
+
+  private getServiceNodePath(): string {
+    const existing = process.env.NODE_PATH ? [process.env.NODE_PATH] : []
+
+    if (!app || !app.isPackaged) {
+      return existing.filter(Boolean).join(path.delimiter)
+    }
+
+    const packagedPaths = [
+      path.join(process.resourcesPath, 'app.asar', 'node_modules'),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules'),
+    ]
+
+    return [...packagedPaths, ...existing].filter(Boolean).join(path.delimiter)
   }
 
   private handleMessage(message: ServiceMessage) {

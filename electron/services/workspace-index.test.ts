@@ -79,13 +79,31 @@ describe('workspace-index', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(tempRoot)
 
     createWorkspace(tempRoot, 'a'.repeat(32), 'file:///C:/repo/project', {
-      allComposers: [
-        {
-          composerId: 'composer-1',
-          name: 'Refactor session',
-          updatedAt: '2026-04-09T10:00:00.000Z',
-        },
-      ],
+      ['workbench.panel.aichat.view.composer-1']: {
+        collapsed: false,
+        isHidden: false,
+        size: 940,
+      },
+    })
+
+    const globalStorageDir = path.join(tempRoot, 'Cursor', 'User', 'globalStorage')
+    fs.mkdirSync(globalStorageDir, { recursive: true })
+    const globalDbPath = path.join(globalStorageDir, 'state.vscdb')
+    fs.writeFileSync(globalDbPath, '', 'utf8')
+    dbEntries.set(globalDbPath, {
+      composerValue: JSON.stringify({
+        allComposers: [
+          {
+            composerId: 'composer-1',
+            name: 'Refactor session',
+            subtitle: 'Edited app.ts',
+            lastUpdatedAt: '2026-04-09T10:00:00.000Z',
+            workspaceIdentifier: {
+              id: 'a'.repeat(32),
+            },
+          },
+        ],
+      }),
     })
 
     const transcriptPath = getTranscriptFilePath('C:\\repo\\project', 'composer-1')
@@ -105,6 +123,8 @@ describe('workspace-index', () => {
     })
     expect(result.transcriptsByWorkspace['a'.repeat(32)][0]).toMatchObject({
       id: 'composer:composer-1',
+      title: 'Refactor session',
+      summary: 'Edited app.ts',
       hasContent: true,
     })
     expect(

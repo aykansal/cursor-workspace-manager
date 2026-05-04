@@ -1,5 +1,6 @@
 {
   "name": "cursor-workspace-manager",
+  "version": "0.1.0",
   "description": "Desktop app to inspect Cursor IDE workspaces, explore AI chat history, analyze SQLite data, and transfer conversations across projects.",
   "homepage": "https://github.com/aykansal/cursor-workspace-manager",
   "repository": {
@@ -42,6 +43,7 @@
     "@fontsource-variable/geist": "^5.2.8",
     "@tailwindcss/vite": "^4.2.2",
     "better-sqlite3": "^12.8.0",
+    "bindings": "^1.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electron-log": "^5.4.3",
@@ -96,7 +98,14 @@
       "dist-electron/**/*",
       "dist/**/*"
     ],
-    "asar": true
+    "asar": true,
+    "asarUnpack": [
+      "dist-electron/service-process.js",
+      "dist-electron/logger-*.js",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*"
+    ]
   },
   "main": "dist-electron/main.js"
 }

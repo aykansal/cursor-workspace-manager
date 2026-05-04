@@ -15,6 +15,10 @@ export function getWorkspaceStoragePath(): string {
   return path.join(getAppDataPath(), 'Cursor', 'User', 'workspaceStorage')
 }
 
+export function getGlobalStorageDbPath(): string {
+  return path.join(getAppDataPath(), 'Cursor', 'User', 'globalStorage', 'state.vscdb')
+}
+
 export function getWorkspaceDir(hash: string): string {
   return path.join(getWorkspaceStoragePath(), hash)
 }

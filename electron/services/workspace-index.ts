@@ -4,6 +4,7 @@ import type DatabaseType from 'better-sqlite3'
 import type { IndexState, TranscriptSummary, WorkspaceIndexSnapshot, WorkspaceSummary } from '../contracts'
 import { logger } from '../logger'
 import {
+  getGlobalStorageDbPath,
   getWorkspaceDbPath,
   getWorkspaceDir,
   getWorkspaceProjectPath,
@@ -18,20 +19,110 @@ type ComposerRecord = {
   title: string
   summary: string | null
   updatedAt: string | null
+  transcriptPath?: string
 }
 
 type ComposerData = {
-  allComposers?: Array<Record<string, unknown>>
   selectedComposerIds?: string[]
   lastFocusedComposerIds?: string[]
   hasMigratedComposerData?: boolean
   hasMigratedMultipleComposers?: boolean
-  [key: string]: unknown
+}
+
+type ComposerPaneState = {
+  [key: string]: {
+    collapsed?: boolean
+    isHidden?: boolean
+    size?: number
+  }
+}
+
+type ComposerHeadersPayload = {
+  allComposers?: unknown[]
+}
+
+type ComposerHeaderEntry = {
+  composerId?: unknown
+  name?: unknown
+  subtitle?: unknown
+  lastUpdatedAt?: unknown
+  conversationCheckpointLastUpdatedAt?: unknown
+  createdAt?: unknown
+  workspaceIdentifier?: {
+    id?: unknown
+  }
 }
 
 type WorkspaceScanEntry = {
   summary: WorkspaceSummary
   transcripts: TranscriptSummary[]
+}
+
+function normalizeTitle(title: string, maxLength = 80): string {
+  const collapsed = title.replace(/\s+/g, ' ').trim()
+  if (collapsed.length <= maxLength) return collapsed
+  return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`
+}
+
+function getFallbackComposerTitle(composerId: string): string {
+  return `Session ${composerId}`
+}
+
+function isFallbackComposerTitle(title: string, composerId: string): boolean {
+  return title === getFallbackComposerTitle(composerId)
+}
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content.trim()
+  }
+
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  const parts: string[] = []
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue
+    const contentItem = item as { type?: string; text?: unknown; content?: unknown }
+
+    if (contentItem.type === 'image_url' || contentItem.type === 'input_image' || contentItem.type === 'file') {
+      continue
+    }
+
+    if (typeof contentItem.text === 'string') {
+      parts.push(contentItem.text.trim())
+      continue
+    }
+
+    const nestedText = extractTextContent(contentItem.content)
+    if (nestedText) {
+      parts.push(nestedText)
+    }
+  }
+
+  return parts.join(' ').trim()
+}
+
+function deriveTitleFromTranscript(transcriptPath: string, composerId: string): string {
+  try {
+    const transcript = fs.readFileSync(transcriptPath, 'utf8')
+    for (const line of transcript.split(/\r?\n/)) {
+      if (!line.trim()) continue
+
+      const entry = JSON.parse(line) as { role?: string; message?: { content?: unknown } }
+      if (entry.role !== 'user') continue
+
+      const title = extractTextContent(entry.message?.content)
+      if (title) {
+        return normalizeTitle(title)
+      }
+    }
+  } catch {
+    // Fall back below.
+  }
+
+  return `Session ${composerId}`
 }
 
 function isComposerRecord(value: ComposerRecord | null): value is ComposerRecord {
@@ -45,7 +136,6 @@ export function readComposerData(db: DatabaseType.Database): ComposerData {
 
   if (!row?.value) {
     return {
-      allComposers: [],
       selectedComposerIds: [],
       lastFocusedComposerIds: [],
       hasMigratedComposerData: true,
@@ -57,7 +147,6 @@ export function readComposerData(db: DatabaseType.Database): ComposerData {
     return JSON.parse(row.value) as ComposerData
   } catch {
     return {
-      allComposers: [],
       selectedComposerIds: [],
       lastFocusedComposerIds: [],
       hasMigratedComposerData: true,
@@ -73,52 +162,25 @@ export function writeComposerData(db: DatabaseType.Database, composerData: Compo
   )
 }
 
-function extractComposerRecords(rawValue?: string, projectPath?: string): ComposerRecord[] {
+function extractComposerRecords(rawValue?: string): ComposerRecord[] {
   if (!rawValue) return []
 
   try {
-    const parsed = JSON.parse(rawValue) as { allComposers?: Array<Record<string, unknown>> }
-    if (!Array.isArray(parsed.allComposers)) return []
+    const parsed = JSON.parse(rawValue) as ComposerPaneState
+    if (!parsed || typeof parsed !== 'object') return []
 
-    return parsed.allComposers
-      .filter((composer) => composer && typeof composer === 'object')
-      .map<ComposerRecord | null>((composer, index) => {
-        const composerId = toText(composer.composerId) ?? `composer-${index + 1}`
-        const name = toText(composer.name) ?? toText(composer.title)
-        const subtitle = toText(composer.subtitle)
-        const unifiedMode = toText(composer.unifiedMode)
-        const forceMode = toText(composer.forceMode)
-        const modeLabel = [unifiedMode, forceMode].filter(Boolean).join(' / ')
-        const filesChanged =
-          typeof composer.filesChangedCount === 'number'
-            ? `${composer.filesChangedCount} files changed`
-            : null
-        const contextUsage =
-          typeof composer.contextUsagePercent === 'number'
-            ? `${composer.contextUsagePercent.toFixed(1)}% context used`
-            : null
-        const title =
-          name ??
-          subtitle ??
-          (unifiedMode
-            ? `${unifiedMode[0]?.toUpperCase() ?? 'S'}${unifiedMode.slice(1)} session ${index + 1}`
-            : `Session ${index + 1}`)
-
-        const hasVisibleMetadata = Boolean(name || subtitle)
-        const hasTranscript = projectPath
-          ? fs.existsSync(resolveTranscriptFilePath(projectPath, composerId))
-          : false
-
-        if (!hasVisibleMetadata && !hasTranscript) {
-          return null
-        }
+    return Object.keys(parsed)
+      .filter((viewKey) => viewKey.startsWith('workbench.panel.aichat.view.'))
+      .map<ComposerRecord | null>((viewKey) => {
+        const composerId = viewKey.replace('workbench.panel.aichat.view.', '')
+        if (!composerId) return null
 
         return {
           composerId,
-          title,
-          summary: subtitle ?? modeLabel ?? filesChanged ?? contextUsage ?? null,
-          updatedAt: toIsoDate(composer.lastUpdatedAt ?? composer.updatedAt ?? composer.createdAt ?? null),
-        } satisfies ComposerRecord
+          title: getFallbackComposerTitle(composerId),
+          summary: null,
+          updatedAt: null,
+        }
       })
       .filter(isComposerRecord)
   } catch {
@@ -126,22 +188,95 @@ function extractComposerRecords(rawValue?: string, projectPath?: string): Compos
   }
 }
 
-function readComposerRecords(db: DatabaseType.Database, projectPath: string): ComposerRecord[] {
-  const row = db
-    .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`)
-    .get() as { value?: string } | undefined
+function readComposerRecords(db: DatabaseType.Database): ComposerRecord[] {
+  const rows = db
+    .prepare("SELECT value FROM ItemTable WHERE key LIKE 'workbench.panel.composerChatViewPane.%' ORDER BY key")
+    .all() as Array<{ value?: string }>
 
-  return extractComposerRecords(row?.value, projectPath)
+  return rows.flatMap((row) => extractComposerRecords(row.value))
+}
+
+function readComposerMetadataIndex(): Map<string, Map<string, ComposerRecord>> {
+  const globalStorageDbPath = getGlobalStorageDbPath()
+  if (!fs.existsSync(globalStorageDbPath)) {
+    return new Map()
+  }
+
+  try {
+    const db = new Database(globalStorageDbPath, { readonly: true })
+    const row = db
+      .prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'`)
+      .get() as { value?: string } | undefined
+    db.close()
+
+    if (!row?.value) return new Map()
+
+    const parsed = JSON.parse(row.value) as ComposerHeadersPayload
+    if (!Array.isArray(parsed.allComposers)) return new Map()
+
+    const metadataByWorkspace = new Map<string, Map<string, ComposerRecord>>()
+
+    for (const item of parsed.allComposers) {
+      if (!item || typeof item !== 'object') continue
+
+      const entry = item as ComposerHeaderEntry
+      const workspaceHash = toText(entry.workspaceIdentifier?.id)
+      const composerId = toText(entry.composerId)
+      if (!workspaceHash || !composerId) continue
+
+      const title = toText(entry.name) ?? getFallbackComposerTitle(composerId)
+      const summary = toText(entry.subtitle)
+      const updatedAt = toIsoDate(entry.conversationCheckpointLastUpdatedAt ?? entry.lastUpdatedAt ?? entry.createdAt)
+
+      const workspaceEntries = metadataByWorkspace.get(workspaceHash) ?? new Map<string, ComposerRecord>()
+      workspaceEntries.set(composerId, {
+        composerId,
+        title,
+        summary,
+        updatedAt,
+      })
+      metadataByWorkspace.set(workspaceHash, workspaceEntries)
+    }
+
+    return metadataByWorkspace
+  } catch (error) {
+    logger.error('Global composer metadata read failed:', {
+      dbPath: globalStorageDbPath,
+      error: error instanceof Error ? error.message : String(error),
+    })
+
+    return new Map()
+  }
+}
+
+function mergeComposerRecords(
+  workspaceHash: string,
+  paneRecords: ComposerRecord[],
+  metadataIndex: Map<string, Map<string, ComposerRecord>>
+): ComposerRecord[] {
+  const metadataByComposerId = metadataIndex.get(workspaceHash)
+  const merged = new Map<string, ComposerRecord>()
+
+  for (const record of paneRecords) {
+    const metadata = metadataByComposerId?.get(record.composerId)
+    merged.set(record.composerId, metadata ?? record)
+  }
+
+  return [...merged.values()]
 }
 
 function buildTranscriptSummary(projectPath: string, composer: ComposerRecord): TranscriptSummary {
   const transcriptPath = resolveTranscriptFilePath(projectPath, composer.composerId)
   const hasContent = fs.existsSync(transcriptPath)
+  const title =
+    !isFallbackComposerTitle(composer.title, composer.composerId) || !hasContent
+      ? composer.title
+      : deriveTitleFromTranscript(transcriptPath, composer.composerId)
 
   return {
     id: `composer:${composer.composerId}`,
     sourceKey: composer.composerId,
-    title: composer.title,
+    title,
     summary: composer.summary,
     updatedAt: composer.updatedAt,
     transcriptPath,
@@ -183,7 +318,10 @@ function buildWorkspaceSummary(
   }
 }
 
-export function scanWorkspace(hash: string): WorkspaceScanEntry {
+export function scanWorkspace(
+  hash: string,
+  composerMetadataIndex: Map<string, Map<string, ComposerRecord>> = new Map()
+): WorkspaceScanEntry {
   const dbPath = getWorkspaceDbPath(hash)
   const projectPath = getWorkspaceProjectPath(hash)
   const lastModified = fs.existsSync(dbPath) ? fs.statSync(dbPath).mtime.toISOString() : null
@@ -198,7 +336,9 @@ export function scanWorkspace(hash: string): WorkspaceScanEntry {
   try {
     const db = new Database(dbPath, { readonly: true })
     const transcripts = sortTranscripts(
-      readComposerRecords(db, projectPath).map((composer) => buildTranscriptSummary(projectPath, composer))
+      mergeComposerRecords(hash, readComposerRecords(db), composerMetadataIndex).map((composer) =>
+        buildTranscriptSummary(projectPath, composer)
+      )
     )
     db.close()
 
@@ -234,7 +374,8 @@ export function scanWorkspaceStorage(): WorkspaceIndexSnapshot {
     .filter((entry) => entry.isDirectory() && entry.name.length === 32)
     .map((entry) => entry.name)
 
-  const entries = hashes.map((hash) => scanWorkspace(hash))
+  const composerMetadataIndex = readComposerMetadataIndex()
+  const entries = hashes.map((hash) => scanWorkspace(hash, composerMetadataIndex))
   const transcriptsByWorkspace = Object.fromEntries(entries.map((entry) => [entry.summary.hash, entry.transcripts]))
 
   return {
